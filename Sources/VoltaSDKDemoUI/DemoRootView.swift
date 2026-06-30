@@ -42,6 +42,11 @@ public struct DemoRootView: View {
     // StoreKit check. The cloud-model row is gated on it.
     @State private var userHasSubscription = true
 
+    // User-account providers (iOS 27): the user's own OpenAI/Claude/Gemini.
+    @State private var userAccounts: [UserAccount] = []
+    @State private var newAccountVendor: CloudVendor = .openAI
+    @State private var newAccountKey = ""
+
     // User-side state: what the end user picked in the ModelSelector.
     @State private var userSelection: ProviderIdentifier?
 
@@ -133,6 +138,38 @@ public struct DemoRootView: View {
                     Text("Developer key only").tag(ModelPreference.developerKeyOnly)
                 }
             }
+            Section("Your accounts (iOS/macOS 27)") {
+                Picker("Vendor", selection: $newAccountVendor) {
+                    ForEach(CloudVendor.allCases, id: \.self) { vendor in
+                        Text(vendor.rawValue).tag(vendor)
+                    }
+                }
+                SecureField("Your \(newAccountVendor.rawValue) key", text: $newAccountKey)
+                    .textContentType(.password)
+                Button("Add account") {
+                    let key = newAccountKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !key.isEmpty else { return }
+                    userAccounts.append(UserAccount(vendor: newAccountVendor, apiKey: key))
+                    newAccountKey = ""
+                    applyConfiguration()
+                }
+                ForEach(userAccounts.indices, id: \.self) { index in
+                    HStack {
+                        Label(userAccounts[index].vendor.rawValue, systemImage: "person.crop.circle")
+                        Spacer()
+                        Button(role: .destructive) {
+                            userAccounts.remove(at: index)
+                            applyConfiguration()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                Text("The user's own account, billed to them. It appears in the picker as a gated option (the user connects it); to route a call to it, turn the other providers off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Privacy") {
                 Toggle("Notify privacy downgrades", isOn: $notifyDowngrades)
                 if !downgradeLog.events.isEmpty {
@@ -205,9 +242,12 @@ public struct DemoRootView: View {
                 orchestrator: orchestrator,
                 selection: $userSelection,
                 onSelection: { provider in
-                    // On-device and Private Cloud Compute are free and need no
-                    // account — activate immediately, no paywall.
-                    guard provider != .onDevice, provider != .privateCloudCompute else {
+                    // On-device and Private Cloud Compute are free; the user's
+                    // own connected account is theirs to use — all activate
+                    // immediately, with no app-side paywall.
+                    guard provider != .onDevice,
+                          provider != .privateCloudCompute,
+                          !provider.rawValue.hasPrefix("user-") else {
                         return .activate
                     }
                     // Developer-key cloud model — entitlement check (in a real
@@ -271,6 +311,7 @@ public struct DemoRootView: View {
         config.enablePrivateCloudCompute = enablePrivateCloudCompute
         config.developerKey = apiKey.isEmpty ? nil : apiKey
         config.developerKeyModel = model.isEmpty ? nil : model
+        config.userAccounts = userAccounts
         config.preference = effectivePreference
         if notifyDowngrades {
             config.privacyDisclosure = .notify { downgrade in

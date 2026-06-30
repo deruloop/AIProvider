@@ -37,6 +37,18 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   for on-device).
 - The high-priority iOS 27 open questions are now answered directly from the
   iOS 27 SDK and documented in `docs/iOS27-Design.md` §8.
+- **User-account cloud providers via the `LanguageModel` front door (iOS 27).**
+  The user's own OpenAI/Claude/Gemini account can join the fallback chain through
+  Apple's public `LanguageModel` protocol (WWDC session 339).
+  `CloudAccountLanguageModel` conforms via a `LanguageModelExecutor` that
+  decomposes the framework `Transcript` into VoltaSDK's `(instructions, history,
+  prompt)` shape and reuses the existing REST client (honouring per-call
+  `generationOptions`; mapping to built-in `LanguageModelError` where faithful).
+  `LanguageModelProvider` wraps any `LanguageModel` into the chain (via a
+  `LanguageModelSession`). New `AIConfiguration.userAccounts`/`UserAccount`,
+  `ProviderIdentifier.userAccount(_:)`, a "Your accounts" section in the demo,
+  and a friendly picker label. *Foundation: auth is a raw key (no OAuth/Keychain),
+  no streaming/reasoning-level, and unverified against live keys on a device.*
 - **`ModelSelector` now auto-selects PCC (VoltaSDKUI).** The gate-free
   auto-select candidate was hardcoded to on-device, so with on-device disabled
   the selector picked nothing even when Private Cloud Compute was available.

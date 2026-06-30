@@ -126,14 +126,23 @@ straight into the core target behind a type-level `@available` gate (the D14
 end state). Only the runtime *values/behaviour* still need a device.
 
 Next steps, in order:
-1. **User-account Gemini/Claude** via the `LanguageModel` + `Executor` pattern
-   (§8): each is a `LanguageModel` whose `Executor.respond(…streamingInto:)`
-   drives the existing `AnthropicProvider`/`GeminiProvider` REST clients
-   (translate transcript in / fragments out). First check whether the
-   Utilities Chat-Completions `LanguageModel` (Q8, separate open-source
-   package) covers this before hand-writing an executor. Wire into
-   `buildProviders` at the same single gate; OAuth attaches via
-   `ModelSelector`'s existing `activation` hook.
+1. **User-account OpenAI/Claude/Gemini** via the `LanguageModel` + `Executor`
+   pattern (§8) — **FOUNDATION BUILT (xcode27, uncommitted demo + committed
+   core `5e1ebdf`/`067ccf1`).** `CloudAccountLanguageModel` (one vendor-agnostic
+   `LanguageModel` keyed by `CloudVendor`) drives the existing REST clients via
+   `FoundationModelsTranscript.decompose`, honours per-call `generationOptions`,
+   maps to `LanguageModelError` where faithful. `LanguageModelProvider` wraps a
+   `LanguageModel` into the chain (via `LanguageModelSession`).
+   `AIConfiguration.userAccounts`/`UserAccount` + `ProviderIdentifier.userAccount(_:)`
+   wired into `buildProviders` at one `@available` gate; demo has a "Your
+   accounts" section. **Still to do:** auth (raw key now — OAuth for Gemini,
+   Keychain/token providers per 339), real streaming, reasoning level, resolve
+   the chain transcript round-trip, extract the shared `LanguageModelError`
+   mapper (dup'd in PCC + `LanguageModelProvider`), and **live-key validation on
+   a device** (compiles only). Article draft:
+   `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
+   Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
+   hand-written.
 2. **`preferred(_ need:) -> any LanguageModel`** bridge (D1/D9): evolve
    `resolveProvider()` to return Apple's `LanguageModel` (confirmed feedable to
    `.model(_:)` and `LanguageModelSession(model:)`, §8) for native Dynamic
