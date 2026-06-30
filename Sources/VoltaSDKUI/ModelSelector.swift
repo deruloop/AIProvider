@@ -95,6 +95,16 @@ public struct ModelSelectorLabel: Sendable {
                 systemImage: "sparkles"
             )
         default:
+            // User-account providers (iOS 27): identifiers look like
+            // "user-OpenAI". Render a friendly, account-flavoured label.
+            if identifier.rawValue.hasPrefix("user-") {
+                let vendor = String(identifier.rawValue.dropFirst("user-".count))
+                return ModelSelectorLabel(
+                    title: "Your \(vendor) account",
+                    subtitle: "Signed in — billed to you",
+                    systemImage: "person.crop.circle"
+                )
+            }
             return ModelSelectorLabel(title: identifier.rawValue, systemImage: "globe")
         }
     }
