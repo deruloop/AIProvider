@@ -6,6 +6,7 @@
 import Foundation
 import Testing
 import Synchronization
+import FoundationModels
 @testable import VoltaSDK
 
 // MARK: - Selection and fallback
@@ -541,6 +542,88 @@ struct PrivateCloudComputeTests {
         // Strict modes stay single-provider — PCC is a fallback tier, not a peer.
         #expect(await identifiers(.onDeviceOnly) == [.onDevice])
         #expect(await identifiers(.developerKeyOnly) == [.openAI])
+    }
+}
+
+// MARK: - Transcript translation (iOS 27 front door)
+
+@Suite("Transcript translation")
+struct TranscriptTranslationTests {
+
+    @Test("decompose inverts entries — the trailing user turn is the prompt")
+    func roundTrip() {
+        let history: [ChatTurn] = [.user("hi"), .assistant("hello"), .user("plan a trip")]
+        let entries = FoundationModelsTranscript.entries(
+            instructions: "Be concise.", history: history
+        )
+        let parts = FoundationModelsTranscript.decompose(Transcript(entries: entries))
+
+        #expect(parts.instructions == "Be concise.")
+        #expect(parts.prompt == "plan a trip")
+        #expect(parts.history == [.user("hi"), .assistant("hello")])
+    }
+
+    @Test("No instructions → nil, not an empty string")
+    func noInstructions() {
+        let entries = FoundationModelsTranscript.entries(
+            instructions: nil, history: [.user("just this")]
+        )
+        let parts = FoundationModelsTranscript.decompose(Transcript(entries: entries))
+        #expect(parts.instructions == nil)
+        #expect(parts.prompt == "just this")
+        #expect(parts.history.isEmpty)
+    }
+}
+
+// MARK: - User-account providers (iOS 27 front door)
+
+@Suite("User-account providers (iOS 27)")
+struct UserAccountProviderTests {
+
+    @Test("No accounts configured → no user-account providers, regardless of OS")
+    func noneConfigured() {
+        #expect(AIOrchestrator.buildUserAccountProviders(from: AIConfiguration()).isEmpty)
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    @Test("Configured accounts become external user-account providers")
+    func builtFromConfig() {
+        var config = AIConfiguration()
+        config.userAccounts = [
+            UserAccount(vendor: .openAI, apiKey: "sk-user"),
+            UserAccount(vendor: .anthropic, apiKey: "sk-ant-user"),
+        ]
+        let providers = AIOrchestrator.buildUserAccountProviders(from: config)
+        #expect(providers.map(\.identifier) == [.userAccount(.openAI), .userAccount(.anthropic)])
+        #expect(providers.allSatisfy { $0.privacyLevel == .external })
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    @Test("User accounts trail the developer key in the prefer chains, absent in only modes")
+    func chainMembership() async {
+        func identifiers(_ preference: ModelPreference) async -> [ProviderIdentifier] {
+            var config = AIConfiguration()
+            config.preference = preference
+            config.developerKey = "sk-test"
+            config.userAccounts = [UserAccount(vendor: .gemini, apiKey: "AIzaUser")]
+            return await AIOrchestrator(configuration: config).providerStatuses().map(\.identifier)
+        }
+        #expect(await identifiers(.preferOnDevice)
+            == [.onDevice, .privateCloudCompute, .openAI, .userAccount(.gemini)])
+        #expect(await identifiers(.developerKeyOnly) == [.openAI])
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    @Test("An account with no credential reports unavailable, never crashes")
+    func unconnectedIsUnavailable() async {
+        var config = AIConfiguration()
+        config.enableOnDevice = false
+        config.enablePrivateCloudCompute = false
+        config.userAccounts = [UserAccount(vendor: .openAI, apiKey: "")]
+        let statuses = await AIOrchestrator(configuration: config).providerStatuses()
+        #expect(statuses.count == 1)
+        #expect(statuses.first?.identifier == .userAccount(.openAI))
+        #expect(statuses.first?.availability == .unavailable(reason: "Account not connected"))
     }
 }
 

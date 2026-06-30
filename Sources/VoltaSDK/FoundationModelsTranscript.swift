@@ -44,4 +44,47 @@ enum FoundationModelsTranscript {
         }
         return entries
     }
+
+    // MARK: Inverse — native Transcript → app-facing shape
+
+    /// The inverse of `entries`: decompose a native `Transcript` back into the
+    /// `(instructions, history, prompt)` shape VoltaSDK providers consume. The
+    /// trailing user turn is treated as the current prompt; everything before
+    /// it is history. Used by the iOS 27 "front door" adapters that drive a
+    /// VoltaSDK `ModelProvider` from inside a `LanguageModelExecutor`.
+    static func decompose(
+        _ transcript: Transcript
+    ) -> (instructions: String?, history: [ChatTurn], prompt: String) {
+        var instructions: [String] = []
+        var turns: [ChatTurn] = []
+        for entry in transcript {
+            switch entry {
+            case .instructions(let i):
+                instructions.append(text(of: i.segments))
+            case .prompt(let p):
+                turns.append(.user(text(of: p.segments)))
+            case .response(let r):
+                turns.append(.assistant(text(of: r.segments)))
+            default:
+                continue   // tool calls / outputs aren't modelled by ChatTurn
+            }
+        }
+        var prompt = ""
+        if let lastUser = turns.lastIndex(where: { $0.role == .user }) {
+            prompt = turns[lastUser].text
+            turns.remove(at: lastUser)
+        }
+        let joined = instructions
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (joined.isEmpty ? nil : joined, turns, prompt)
+    }
+
+    private static func text(of segments: [Transcript.Segment]) -> String {
+        segments.reduce(into: "") { result, segment in
+            if case .text(let textSegment) = segment {
+                result += textSegment.content
+            }
+        }
+    }
 }

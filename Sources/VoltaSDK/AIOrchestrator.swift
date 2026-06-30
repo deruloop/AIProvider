@@ -35,6 +35,25 @@ public enum ModelPreference: Sendable, CaseIterable {
 
 // MARK: - Configuration
 
+/// A user's own cloud account (iOS 27): the user supplies the credential and
+/// is billed, as opposed to the developer key (`developerKey`) the app pays
+/// for. Reached through the public `LanguageModel` protocol. The credential is
+/// a raw key for now; OAuth (e.g. Gemini) and secure token storage are planned
+/// — see the design notes.
+public struct UserAccount: Sendable, Equatable {
+    public var vendor: CloudVendor
+    /// The user's key or access token. Empty = not connected (skipped).
+    public var apiKey: String
+    /// Model name within the vendor; `nil` = the vendor's default.
+    public var model: String?
+
+    public init(vendor: CloudVendor, apiKey: String, model: String? = nil) {
+        self.vendor = vendor
+        self.apiKey = apiKey
+        self.model = model
+    }
+}
+
 public struct AIConfiguration: Sendable {
     /// Enables the on-device model (requires Apple Intelligence on the device).
     public var enableOnDevice: Bool = true
@@ -46,6 +65,13 @@ public struct AIConfiguration: Sendable {
     /// `.preferOnDevice` / `.preferDeveloperKey` chains, never in the strict
     /// `.onDeviceOnly` / `.developerKeyOnly` modes.
     public var enablePrivateCloudCompute: Bool = true
+
+    /// The user's own cloud accounts (iOS 27+). Each becomes a provider in the
+    /// fallback chain, reached through the public `LanguageModel` protocol.
+    /// Empty by default; ignored entirely on iOS 26. Like the developer key,
+    /// these are external-privacy providers and never auto-selected by the
+    /// `ModelSelector` (the user must connect the account first).
+    public var userAccounts: [UserAccount] = []
 
     /// Cloud provider developer key. Accepts OpenAI, Anthropic (Claude),
     /// or Google (Gemini) keys — the vendor is auto-detected from the key
@@ -353,20 +379,48 @@ public actor AIOrchestrator {
         let onDevice: (any ModelProvider)? = config.enableOnDevice ? OnDeviceProvider() : nil
         let pcc = buildPrivateCloudComputeProvider(from: config)
         let cloud = buildCloudProvider(from: config)
+        // User-account providers (iOS 27) are additional external options the
+        // user connects; they trail the app's own providers in the default
+        // order, and the user can re-lead the chain via the picker.
+        let userAccounts = buildUserAccountProviders(from: config)
 
         // Ordered by privacy: on-device (max) → PCC (.appleCloud) → developer
-        // key (external). PCC is a fallback tier, not a destination of its own,
-        // so it joins the two "prefer" chains but not the strict "only" modes.
+        // key (external) → user accounts (external). PCC is a fallback tier, not
+        // a destination of its own, so it (and user accounts) join the two
+        // "prefer" chains but not the strict "only" modes.
         switch config.preference {
         case .preferOnDevice:
-            return [onDevice, pcc, cloud].compactMap { $0 }
+            return [onDevice, pcc, cloud].compactMap { $0 } + userAccounts
         case .preferDeveloperKey:
-            return [cloud, pcc, onDevice].compactMap { $0 }
+            return [cloud, pcc, onDevice].compactMap { $0 } + userAccounts
         case .onDeviceOnly:
             return [onDevice].compactMap { $0 }
         case .developerKeyOnly:
             return [cloud].compactMap { $0 }
         }
+    }
+
+    /// Builds a chain provider for each configured user account (iOS 27+),
+    /// reached through the public `LanguageModel` protocol via
+    /// `CloudAccountLanguageModel`. Empty on iOS 26 or when none are configured
+    /// — the single `@available` gate for this tier (D14).
+    static func buildUserAccountProviders(from config: AIConfiguration) -> [any ModelProvider] {
+        guard !config.userAccounts.isEmpty else { return [] }
+        if #available(iOS 27.0, macOS 27.0, *) {
+            return config.userAccounts.map { account in
+                LanguageModelProvider(
+                    identifier: .userAccount(account.vendor),
+                    privacyLevel: .external,
+                    model: CloudAccountLanguageModel(
+                        vendor: account.vendor,
+                        apiKey: account.apiKey,
+                        model: account.model
+                    ),
+                    connected: !account.apiKey.isEmpty
+                )
+            }
+        }
+        return []
     }
 
     /// Private Cloud Compute is the single iOS 27 wire-in point (D14): a

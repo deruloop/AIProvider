@@ -27,7 +27,14 @@ public struct ProviderIdentifier: Hashable, Sendable, CustomStringConvertible {
     /// Private Cloud Compute (iOS 27): Apple-hosted, free with a per-user
     /// daily quota, no key. Sits between on-device and the developer key.
     public static let privateCloudCompute = ProviderIdentifier("private-cloud-compute")
-    // iOS 27 (still to come): user-account variants of the above vendors
+
+    /// A user-account provider (iOS 27): the user's *own* OpenAI / Claude /
+    /// Gemini account, billed to them, reached through the public
+    /// `LanguageModel` protocol. Distinct from the developer-key providers
+    /// above so the chain and pickers can tell them apart.
+    public static func userAccount(_ vendor: CloudVendor) -> ProviderIdentifier {
+        ProviderIdentifier("user-\(vendor.rawValue)")
+    }
 }
 
 // MARK: - Privacy level
