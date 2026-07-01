@@ -110,7 +110,7 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         } catch let error as PrivateCloudComputeLanguageModel.Error {
             throw Self.map(error)
         } catch let error as LanguageModelError {
-            throw Self.map(error)
+            throw ProviderError(error)               // shared mapping
         } catch is CancellationError {
             throw ProviderError.cancelled
         } catch {
@@ -147,28 +147,6 @@ public struct PrivateCloudComputeProvider: ModelProvider {
             return .network(code: -1)
         case .networkFailure:
             return .network(code: -1)
-        @unknown default:
-            return .generation(String(describing: error))
-        }
-    }
-
-    /// Maps the generic `LanguageModel` error surface (PCC reaches it through
-    /// the shared `LanguageModelSession`). Mirrors the on-device mapping:
-    /// recoverable for context/language/rate, terminal for guardrail/refusal.
-    static func map(_ error: LanguageModelError) -> ProviderError {
-        switch error {
-        case .contextSizeExceeded:
-            return .contextWindowExceeded
-        case .rateLimited(let info):
-            return .rateLimited(retryAfter: info.resetDate.map { $0.timeIntervalSinceNow })
-        case .guardrailViolation, .refusal:
-            return .guardrailViolation(error.localizedDescription)
-        case .unsupportedLanguageOrLocale:
-            return .unsupportedLanguage
-        case .timeout:
-            return .network(code: -1)
-        case .unsupportedCapability, .unsupportedTranscriptContent, .unsupportedGenerationGuide:
-            return .generation(String(describing: error))
         @unknown default:
             return .generation(String(describing: error))
         }

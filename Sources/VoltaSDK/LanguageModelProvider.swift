@@ -67,33 +67,11 @@ struct LanguageModelProvider<M: LanguageModel>: ModelProvider {
         } catch let error as ProviderError {
             throw error                              // already our shape
         } catch let error as LanguageModelError {
-            throw Self.map(error)
+            throw ProviderError(error)               // shared mapping
         } catch is CancellationError {
             throw ProviderError.cancelled
         } catch {
             throw ProviderError.generation(String(describing: error))
-        }
-    }
-
-    /// Maps the framework's `LanguageModelError` back onto `ProviderError` for
-    /// the orchestrator. (Mirrors the mapping in `PrivateCloudComputeProvider`;
-    /// a shared mapper is a worthwhile later cleanup.)
-    private static func map(_ error: LanguageModelError) -> ProviderError {
-        switch error {
-        case .contextSizeExceeded:
-            return .contextWindowExceeded
-        case .rateLimited(let info):
-            return .rateLimited(retryAfter: info.resetDate.map { $0.timeIntervalSinceNow })
-        case .guardrailViolation, .refusal:
-            return .guardrailViolation(error.localizedDescription)
-        case .unsupportedLanguageOrLocale:
-            return .unsupportedLanguage
-        case .timeout:
-            return .network(code: -1)
-        case .unsupportedCapability, .unsupportedTranscriptContent, .unsupportedGenerationGuide:
-            return .generation(String(describing: error))
-        @unknown default:
-            return .generation(String(describing: error))
         }
     }
 }
