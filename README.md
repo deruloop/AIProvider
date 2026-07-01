@@ -341,6 +341,54 @@ quickest confidence check is: with the capability added, the
 `appleCloud`. Testing is allowed via **TestFlight or ad-hoc distribution**, and
 test installs do **not** count toward the 2M-download limit.
 
+## User accounts & managed OAuth (iOS / macOS 27)
+
+Beyond the developer key (which the app pays for), iOS 27 lets a user bring
+**their own** OpenAI / Claude / Gemini account through Apple's public
+`LanguageModel` protocol. Add them to `AIConfiguration.userAccounts`.
+
+The simplest path — the user pastes their own key:
+
+```swift
+import VoltaSDK
+
+config.userAccounts = [UserAccount(vendor: .anthropic, apiKey: userProvidedKey)]
+```
+
+For a real **"Sign in with `<Vendor>`"** flow, add the optional **`VoltaSDKAuth`**
+product. It runs the whole OAuth flow for you — the sign-in window
+(`ASWebAuthenticationSession`), PKCE, the code exchange, Keychain storage, and
+silent refresh:
+
+```swift
+import VoltaSDKAuth
+
+let account = OAuthAccount(
+    vendor: .gemini,
+    configuration: OAuthConfiguration(
+        authorizationEndpoint: /* from your provider registration */ …,
+        tokenEndpoint: …,
+        clientID: "your-client-id",
+        redirectURI: URL(string: "yourapp://oauth-callback")!,
+        scopes: [ … ]
+    )
+)
+
+// From your UI (e.g. the ModelSelector `.deferred` hook):
+try await account.signIn()
+
+// Hand it to the chain — the token is fetched and refreshed automatically:
+config.userAccounts = [UserAccount(oauth: account)]
+```
+
+**The one step VoltaSDK can't do for you** is registering your app with the
+provider to get that client ID + redirect. OAuth is per-app by design — the
+provider has to know *which* app is asking, and a single shared client would be
+one revocation away from breaking every app — so "enable a provider" means
+"register once, paste a client ID, enable," and VoltaSDK automates everything
+after that. (`VoltaSDKAuth` uses AuthenticationServices/Keychain, so it's a
+separate product from the headless core.)
+
 ## Demo apps
 
 Both demos are signed Xcode apps sharing the same UI (`VoltaSDKDemoUI`), so
