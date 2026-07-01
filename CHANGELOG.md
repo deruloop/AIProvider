@@ -47,8 +47,10 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   `LanguageModelProvider` wraps any `LanguageModel` into the chain (via a
   `LanguageModelSession`). New `AIConfiguration.userAccounts`/`UserAccount`,
   `ProviderIdentifier.userAccount(_:)`, a "Your accounts" section in the demo,
-  and a friendly picker label. *Foundation: auth is a raw key (no OAuth/Keychain),
-  no streaming/reasoning-level, and unverified against live keys on a device.*
+  and a friendly picker label. The credential is a **per-call token provider**
+  (static key, Keychain, or OAuth token) living on the model, off the hashable
+  executor config (session 339). *Foundation: the OAuth flow itself isn't wired;
+  no streaming/reasoning-level; unverified against live keys on a device.*
 - **`ModelSelector` now auto-selects PCC (VoltaSDKUI).** The gate-free
   auto-select candidate was hardcoded to on-device, so with on-device disabled
   the selector picked nothing even when Private Cloud Compute was available.

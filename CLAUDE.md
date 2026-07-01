@@ -135,11 +135,14 @@ Next steps, in order:
    `LanguageModel` into the chain (via `LanguageModelSession`).
    `AIConfiguration.userAccounts`/`UserAccount` + `ProviderIdentifier.userAccount(_:)`
    wired into `buildProviders` at one `@available` gate; demo has a "Your
-   accounts" section. **Still to do:** auth (raw key now — OAuth for Gemini,
-   Keychain/token providers per 339), real streaming, reasoning level, resolve
-   the chain transcript round-trip, extract the shared `LanguageModelError`
-   mapper (dup'd in PCC + `LanguageModelProvider`), and **live-key validation on
-   a device** (compiles only). Article draft:
+   accounts" section. **Auth:** credential is a per-call **token provider**
+   (`UserAccount.token` / `CloudAccountLanguageModel.token`, static-key
+   convenience kept) living on the model — off the hashable executor
+   `Configuration` per 339; the shared `LanguageModelError` mapper is extracted
+   (`ProviderError(_:)`). **Still to do:** the actual OAuth flow (Firebase for
+   Gemini) wired into `ModelSelector`'s `.deferred` hook, real streaming,
+   reasoning level, resolve the chain transcript round-trip, and **live-key
+   validation on a device** (compiles only). Article draft:
    `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.

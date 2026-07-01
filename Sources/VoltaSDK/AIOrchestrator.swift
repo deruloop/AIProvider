@@ -37,20 +37,43 @@ public enum ModelPreference: Sendable, CaseIterable {
 
 /// A user's own cloud account (iOS 27): the user supplies the credential and
 /// is billed, as opposed to the developer key (`developerKey`) the app pays
-/// for. Reached through the public `LanguageModel` protocol. The credential is
-/// a raw key for now; OAuth (e.g. Gemini) and secure token storage are planned
-/// — see the design notes.
-public struct UserAccount: Sendable, Equatable {
+/// for. Reached through the public `LanguageModel` protocol.
+///
+/// The credential is a **token provider**, resolved when a call is made
+/// (session 339): a static key, a Keychain read, or a refreshed OAuth token
+/// all fit. A static-key convenience initializer covers the simple case.
+public struct UserAccount: Sendable {
     public var vendor: CloudVendor
-    /// The user's key or access token. Empty = not connected (skipped).
-    public var apiKey: String
     /// Model name within the vendor; `nil` = the vendor's default.
     public var model: String?
+    /// Resolves the current credential at call time.
+    public var token: @Sendable () async throws -> String
+    /// Whether the account is connected — drives availability without a
+    /// network call. `true` by default for token providers; the key
+    /// convenience derives it from the key being non-empty.
+    public var isConnected: Bool
 
-    public init(vendor: CloudVendor, apiKey: String, model: String? = nil) {
+    /// Token-provider initializer (OAuth / Keychain / any async source).
+    public init(
+        vendor: CloudVendor,
+        model: String? = nil,
+        isConnected: Bool = true,
+        token: @escaping @Sendable () async throws -> String
+    ) {
         self.vendor = vendor
-        self.apiKey = apiKey
         self.model = model
+        self.isConnected = isConnected
+        self.token = token
+    }
+
+    /// Static-key convenience. An empty key means "not connected".
+    public init(vendor: CloudVendor, apiKey: String, model: String? = nil) {
+        self.init(
+            vendor: vendor,
+            model: model,
+            isConnected: !apiKey.isEmpty,
+            token: { apiKey }
+        )
     }
 }
 
@@ -413,10 +436,10 @@ public actor AIOrchestrator {
                     privacyLevel: .external,
                     model: CloudAccountLanguageModel(
                         vendor: account.vendor,
-                        apiKey: account.apiKey,
-                        model: account.model
+                        model: account.model,
+                        token: account.token
                     ),
-                    connected: !account.apiKey.isEmpty
+                    connected: account.isConnected
                 )
             }
         }
