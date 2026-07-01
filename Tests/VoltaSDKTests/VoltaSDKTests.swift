@@ -8,6 +8,7 @@ import Testing
 import Synchronization
 import FoundationModels
 @testable import VoltaSDK
+@testable import VoltaSDKAuth
 
 // MARK: - Selection and fallback
 
@@ -624,6 +625,27 @@ struct UserAccountProviderTests {
         #expect(statuses.count == 1)
         #expect(statuses.first?.identifier == .userAccount(.openAI))
         #expect(statuses.first?.availability == .unavailable(reason: "Account not connected"))
+    }
+}
+
+// MARK: - OAuth (VoltaSDKAuth)
+
+@Suite("OAuth PKCE")
+struct PKCETests {
+
+    @Test("S256 challenge matches the RFC 7636 test vector")
+    func rfcVector() {
+        // RFC 7636 Appendix B.
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        #expect(PKCE.challenge(for: verifier) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+    }
+
+    @Test("A generated verifier is 43 URL-safe base64 characters")
+    func verifierShape() {
+        let verifier = PKCE.makeVerifier()
+        #expect(verifier.count == 43)
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+        #expect(verifier.allSatisfy { allowed.contains($0) })
     }
 }
 

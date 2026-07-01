@@ -51,6 +51,17 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   (static key, Keychain, or OAuth token) living on the model, off the hashable
   executor config (session 339). *Foundation: the OAuth flow itself isn't wired;
   no streaming/reasoning-level; unverified against live keys on a device.*
+- **Managed OAuth for user accounts — new `VoltaSDKAuth` module.** Automates the
+  whole runtime sign-in so the developer's side is "register your app once →
+  paste a client ID → enable": `OAuthAccount` runs `ASWebAuthenticationSession`
+  + PKCE (RFC 7636), exchanges the code, stores the token in the Keychain, and
+  refreshes it silently; `OAuthConfiguration` carries the endpoints/client ID
+  the developer registered with the provider; `UserAccount(oauth:)` bridges it
+  into the chain (the executor's token-provider seam). Kept out of the headless
+  core because it uses AuthenticationServices/Keychain. *The one irreducible
+  step is the developer's: each app must be its own registered OAuth client
+  (client ID + redirect) — a shared/SDK-wide client is against provider terms.
+  Compiles; the live flow needs a registered client on a device.*
 - **`ModelSelector` now auto-selects PCC (VoltaSDKUI).** The gate-free
   auto-select candidate was hardcoded to on-device, so with on-device disabled
   the selector picked nothing even when Private Cloud Compute was available.

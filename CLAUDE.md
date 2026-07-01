@@ -139,10 +139,15 @@ Next steps, in order:
    (`UserAccount.token` / `CloudAccountLanguageModel.token`, static-key
    convenience kept) living on the model — off the hashable executor
    `Configuration` per 339; the shared `LanguageModelError` mapper is extracted
-   (`ProviderError(_:)`). **Still to do:** the actual OAuth flow (Firebase for
-   Gemini) wired into `ModelSelector`'s `.deferred` hook, real streaming,
-   reasoning level, resolve the chain transcript round-trip, and **live-key
-   validation on a device** (compiles only). Article draft:
+   (`ProviderError(_:)`). **OAuth is automated** by the new **`VoltaSDKAuth`**
+   module (`OAuthAccount`: `ASWebAuthenticationSession` + PKCE + Keychain +
+   silent refresh; `OAuthConfiguration`; `UserAccount(oauth:)` bridge) — kept
+   out of the headless core (AuthenticationServices/Keychain). The one
+   irreducible step stays the developer's: each app must be its own registered
+   OAuth client (client ID + redirect) — a shared/SDK-wide client is against
+   provider terms. **Still to do:** real streaming, reasoning level, resolve the
+   chain transcript round-trip, and **live validation on a device** with a
+   registered client / real key (all of Part 2 compiles only). Article draft:
    `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.
