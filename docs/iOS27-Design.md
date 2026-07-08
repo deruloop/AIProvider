@@ -285,10 +285,21 @@ Consequences folded into the implementation:
   is still open).
 - `availability` is **not** entitlement-aware, so it cannot be the safety gate.
   Because the missing entitlement is a trap (uncatchable) and PCC is default-on,
-  `PrivateCloudComputeProvider.availability()` now checks the running binary's
-  own entitlements first — `SecTaskCreateFromSelf` +
-  `SecTaskCopyValueForEntitlement` — and reports `.unavailable` when the
-  entitlement is absent, turning a guaranteed crash into a graceful skip.
+  `PrivateCloudComputeProvider` checks the running binary's own entitlements —
+  `SecTaskCreateFromSelf` + `SecTaskCopyValueForEntitlement` — and reports
+  `.unavailable` when the entitlement is absent, turning a guaranteed crash
+  into a graceful skip.
+- **Second finding (July 2026, observed live in `macOSDemo`): the gate must sit
+  at CONSTRUCTION, not just at the call sites.** In a long-running unentitled
+  app, merely *instantiating* `PrivateCloudComputeLanguageModel` spins up
+  background status machinery (console: "Failed to check usage limit status",
+  "establishment of session failed with Missing entitlement", ModelManagerError
+  1007) that eventually **traps on a background thread** (`EXC_BREAKPOINT`) —
+  no call-site guard can catch it because our code isn't on that stack. (The
+  short-lived CLI probe survived earlier only because it exited before the
+  machinery fired.) Since the entitlement is baked into the code signature and
+  cannot change at runtime, the provider now decides at `init`: unentitled →
+  the model is never created (`nil`) → unavailable → skipped.
 - To *actually* call PCC you need a real **signed app** (not `swift run` / an
   unsigned binary) whose App ID has the PCC capability granted by Apple and
   whose `.entitlements` declares the key.

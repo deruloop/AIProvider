@@ -32,6 +32,14 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   the running binary carries the entitlement (`SecTask` self-check) and reports
   `.unavailable` when it does not — a missing entitlement degrades to a graceful
   fallback instead of crashing the app. Confirmed against macOS 27 beta.
+- **Entitlement safety, part 2 — gate at construction.** Observed live: in a
+  long-running unentitled app, merely *instantiating*
+  `PrivateCloudComputeLanguageModel` starts background status machinery that
+  eventually traps on a background thread (`EXC_BREAKPOINT`) — beyond the reach
+  of any call-site guard. The provider now runs the `SecTask` check at `init`
+  and never creates the model in an unentitled process (the entitlement is
+  signature-baked, so an init-time decision is sound). Fixes a crash where a
+  default-on PCC took down an unentitled app minutes into a session.
 - **Internal:** transcript construction shared between the on-device and PCC
   providers in a new `FoundationModelsTranscript` helper (no behaviour change
   for on-device).

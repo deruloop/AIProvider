@@ -38,25 +38,32 @@ public struct PrivateCloudComputeProvider: ModelProvider {
     /// on the first generation — see the comment on `availability()`.
     public static let requiredEntitlement = "com.apple.developer.private-cloud-compute"
 
-    /// One model instance: it is `Observable` and reads the device-/user-wide
-    /// quota, so there is nothing to gain from recreating it per call.
-    private let model: PrivateCloudComputeLanguageModel
+    /// One model instance — but ONLY in an entitled process (`nil` otherwise).
+    ///
+    /// The entitlement gate lives at CONSTRUCTION, not just at the call sites.
+    /// Observed on macOS 27 (beta 27A5209h), in a long-running unentitled app:
+    /// merely instantiating `PrivateCloudComputeLanguageModel` spins up
+    /// background status machinery ("Failed to check usage limit status",
+    /// "establishment of session failed with Missing entitlement") that
+    /// eventually TRAPS on a background thread (EXC_BREAKPOINT) — a crash no
+    /// call-site guard can intercept, because our code isn't on the stack.
+    /// The entitlement is baked into the code signature and cannot change at
+    /// runtime, so deciding once at init is sound: unentitled → never create
+    /// the model → the provider reports unavailable and the chain skips it.
+    private let model: PrivateCloudComputeLanguageModel?
 
     public init() {
-        self.model = PrivateCloudComputeLanguageModel()
+        self.model = Self.hasRequiredEntitlement() ? PrivateCloudComputeLanguageModel() : nil
     }
 
     public func availability() async -> ProviderAvailability {
-        // Entitlement gate FIRST. Verified on macOS 27 (beta 27A5209h): a
-        // process missing `com.apple.developer.private-cloud-compute` does NOT
-        // see `model.availability` change — it still reports `.available` — but
-        // the first `respond` traps with
+        // Entitlement gate (decided at init — see `model`). Also verified: an
+        // unentitled process does NOT see `model.availability` change — it
+        // still reports `.available` — but the first `respond` traps with
         //   "Process is missing required entitlement: com.apple.developer.private-cloud-compute"
-        // a fatal error our `do/catch` cannot intercept. Since PCC is default-on,
-        // we must turn that guaranteed crash into a graceful skip: if the running
-        // binary is not signed with the entitlement, report unavailable so the
-        // chain falls through instead of calling PCC at all.
-        guard Self.hasRequiredEntitlement() else {
+        // a fatal error `do/catch` cannot intercept. Since PCC is default-on,
+        // the missing entitlement must degrade to a graceful skip, never a call.
+        guard let model else {
             return .unavailable(reason: "Missing the \(Self.requiredEntitlement) entitlement")
         }
         switch model.availability {
@@ -91,6 +98,12 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
+        // Unentitled process → the model was never created (see `model`).
+        // Recoverable: the chain moves on. (The orchestrator won't normally
+        // reach here — availability() already reported unavailable — but a
+        // direct caller must not trap either.)
+        guard let model else { throw ProviderError.noProviderAvailable }
+
         // Stateless per call (D12): the app-supplied history is rebuilt as a
         // native Transcript so PCC sees the conversation as its own — the same
         // shape the on-device provider uses.
