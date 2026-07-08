@@ -649,6 +649,85 @@ struct PKCETests {
     }
 }
 
+/// Returns a canned HTTP response for any request — mocks the token endpoint.
+final class MockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var body = Data()
+    nonisolated(unsafe) static var status = 200
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Suite("OAuth token flow", .serialized)
+struct OAuthTokenFlowTests {
+
+    let config = OAuthConfiguration(
+        authorizationEndpoint: URL(string: "https://idp.example/authorize")!,
+        tokenEndpoint: URL(string: "https://idp.example/token")!,
+        clientID: "abc123",
+        redirectURI: URL(string: "voltademo://oauth")!,
+        scopes: ["openid", "email"]
+    )
+
+    private func mockSession(json: String, status: Int = 200) -> URLSession {
+        MockURLProtocol.body = Data(json.utf8)
+        MockURLProtocol.status = status
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    @Test("Authorization URL carries client_id, PKCE S256 challenge, redirect, state, scope")
+    func authorizationURL() {
+        let account = OAuthAccount(vendor: .gemini, configuration: config)
+        // Reuse the RFC 7636 verifier so the expected challenge is known.
+        let url = account.authorizationURL(
+            verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", state: "xyz"
+        )
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
+        func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+
+        #expect(value("client_id") == "abc123")
+        #expect(value("response_type") == "code")
+        #expect(value("redirect_uri") == "voltademo://oauth")
+        #expect(value("code_challenge_method") == "S256")
+        #expect(value("code_challenge") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+        #expect(value("state") == "xyz")
+        #expect(value("scope") == "openid email")
+    }
+
+    @Test("Token exchange parses access + refresh token and expiry")
+    func tokenExchange() async throws {
+        let session = mockSession(
+            json: #"{"access_token":"tok-abc","refresh_token":"ref-xyz","expires_in":3600}"#
+        )
+        let account = OAuthAccount(vendor: .gemini, configuration: config, urlSession: session)
+        let token = try await account.exchange(grant: ["grant_type": "authorization_code", "code": "c"])
+
+        #expect(token.accessToken == "tok-abc")
+        #expect(token.refreshToken == "ref-xyz")
+        #expect(token.expiresAt != nil)
+    }
+
+    @Test("A token-endpoint error surfaces as tokenExchangeFailed")
+    func tokenError() async {
+        let session = mockSession(json: #"{"error":"invalid_grant"}"#, status: 400)
+        let account = OAuthAccount(vendor: .gemini, configuration: config, urlSession: session)
+        await #expect(throws: OAuthError.self) {
+            _ = try await account.exchange(grant: ["grant_type": "authorization_code", "code": "bad"])
+        }
+    }
+}
+
 // MARK: - Global configuration
 
 @Suite("Configuration", .serialized)

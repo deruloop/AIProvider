@@ -24,8 +24,8 @@ import UIKit
 import AppKit
 #endif
 
-/// A stored token bundle.
-private struct OAuthToken: Codable, Sendable {
+/// A stored token bundle. Internal so the token flow is unit-testable.
+struct OAuthToken: Codable, Sendable {
     var accessToken: String
     var refreshToken: String?
     var expiresAt: Date?
@@ -52,14 +52,21 @@ public final class OAuthAccount: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cached: OAuthToken?
+    /// Injectable for tests (mock the token endpoint).
+    private let urlSession: URLSession
 
     // Retained across the interactive flow; touched only on the main actor.
     private var anchor: AnchorProvider?
     private var liveSession: ASWebAuthenticationSession?
 
-    public init(vendor: CloudVendor, configuration: OAuthConfiguration) {
+    public init(
+        vendor: CloudVendor,
+        configuration: OAuthConfiguration,
+        urlSession: URLSession = .shared
+    ) {
         self.vendor = vendor
         self.config = configuration
+        self.urlSession = urlSession
         self.keychain = KeychainTokenStore(service: "com.voltasdk.oauth")
         self.accountKey = "\(vendor.rawValue)#\(configuration.clientID)"
         if let data = keychain.load(account: accountKey),
@@ -105,25 +112,9 @@ public final class OAuthAccount: @unchecked Sendable {
     public func signIn() async throws {
         let verifier = PKCE.makeVerifier()
         let state = UUID().uuidString
-
-        var components = URLComponents(
-            url: config.authorizationEndpoint, resolvingAgainstBaseURL: false
-        )!
-        var items = components.queryItems ?? []
-        items.append(contentsOf: [
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "client_id", value: config.clientID),
-            URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
-            URLQueryItem(name: "code_challenge", value: PKCE.challenge(for: verifier)),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "state", value: state),
-        ])
-        if !config.scopes.isEmpty {
-            items.append(URLQueryItem(name: "scope", value: config.scopes.joined(separator: " ")))
-        }
-        components.queryItems = items
-
-        let callbackURL = try await present(authorizationURL: components.url!)
+        let callbackURL = try await present(
+            authorizationURL: authorizationURL(verifier: verifier, state: state)
+        )
 
         guard let returnedState = queryValue("state", in: callbackURL),
               returnedState == state else {
@@ -143,6 +134,27 @@ public final class OAuthAccount: @unchecked Sendable {
     }
 
     // MARK: Internals
+
+    /// Builds the authorization URL (PKCE S256 + state). Internal for testing.
+    func authorizationURL(verifier: String, state: String) -> URL {
+        var components = URLComponents(
+            url: config.authorizationEndpoint, resolvingAgainstBaseURL: false
+        )!
+        var items = components.queryItems ?? []
+        items.append(contentsOf: [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: config.clientID),
+            URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
+            URLQueryItem(name: "code_challenge", value: PKCE.challenge(for: verifier)),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "state", value: state),
+        ])
+        if !config.scopes.isEmpty {
+            items.append(URLQueryItem(name: "scope", value: config.scopes.joined(separator: " ")))
+        }
+        components.queryItems = items
+        return components.url!
+    }
 
     @MainActor
     private func present(authorizationURL: URL) async throws -> URL {
@@ -168,7 +180,9 @@ public final class OAuthAccount: @unchecked Sendable {
         }
     }
 
-    private func exchange(grant: [String: String]) async throws -> OAuthToken {
+    /// Posts a grant to the token endpoint and parses the token. Internal so
+    /// the exchange/refresh can be unit-tested with a mocked `URLSession`.
+    func exchange(grant: [String: String]) async throws -> OAuthToken {
         var request = URLRequest(url: config.tokenEndpoint)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -177,7 +191,7 @@ public final class OAuthAccount: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await urlSession.data(for: request)
         } catch {
             throw OAuthError.tokenExchangeFailed(error.localizedDescription)
         }
