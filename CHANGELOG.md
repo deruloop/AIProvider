@@ -68,8 +68,34 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   into the chain (the executor's token-provider seam). Kept out of the headless
   core because it uses AuthenticationServices/Keychain. *The one irreducible
   step is the developer's: each app must be its own registered OAuth client
-  (client ID + redirect) — a shared/SDK-wide client is against provider terms.
-  Compiles; the live flow needs a registered client on a device.*
+  (client ID + redirect) — a shared/SDK-wide client is against provider terms.*
+  **Validated live against Google** (real client, real sign-in, token issued,
+  stored, refreshed) and hardened from what live testing surfaced: the session
+  completion is built `nonisolated` — `ASWebAuthenticationSession` invokes it
+  on a background XPC queue, and a main-actor-inherited closure traps at entry
+  under Swift 6's dynamic isolation checking (`EXC_BREAKPOINT` before any of
+  our code runs); continuation resumption is one-shot;
+  `OAuthConfiguration.additionalAuthorizationParameters` carries provider
+  quirks (Google: `access_type=offline` or no refresh token is ever issued,
+  `prompt=consent` to re-show granular consent); and granted scopes from the
+  token response are validated at sign-in — under-granting (granular consent,
+  stripped scopes) throws `scopesNotGranted(missing:granted:)` at the door
+  instead of failing later at the first API call.
+- **Gemini: credential-aware dual transport.** A Google API key (`AIza…`)
+  speaks the Developer API (`generativelanguage`, `x-goog-api-key` header) as
+  before. An OAuth user token turned out to need a *different transport*, not
+  just a different header: `generativelanguage` rejects user tokens for
+  generation regardless of granted scopes (observed live), so `GeminiProvider`
+  routes OAuth credentials to the Code Assist endpoint
+  (`cloudcode-pa.googleapis.com` — the one behind Google's own Gemini CLI
+  sign-in), including its `loadCodeAssist`/`onboardUser` handshake and
+  `{model, project, request}` envelope. 401/403 responses surface Google's own
+  message verbatim. **Provider-policy finding:** that endpoint is a private
+  API, visible/enable-able only to Google's own client projects — with a
+  third-party OAuth client, personal-account Gemini *generation* stays gated
+  (a valid, correctly-scoped token is not enough). User-account Gemini
+  generation is served by the user's API key instead; the OAuth transport is
+  in place for contexts where the API is available to the client's project.
 - **`ModelSelector` now auto-selects PCC (VoltaSDKUI).** The gate-free
   auto-select candidate was hardcoded to on-device, so with on-device disabled
   the selector picked nothing even when Private Cloud Compute was available.

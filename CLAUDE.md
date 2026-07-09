@@ -63,8 +63,8 @@ questions doc into the design doc; release → CHANGELOG + state here.
   runtime; on 26.0–26.3 context handling stays reactive-only, by design.
 - **iOS 27: implementation STARTED on `xcode27` (June 2026).** The hard gate
   is cleared — Xcode 27 beta (27A5209h) + iOS 27.0 SDK are installed at
-  `~/Downloads/Xcode-beta.app` (build with
-  `DEVELOPER_DIR=~/Downloads/Xcode-beta.app/Contents/Developer swift build|test`;
+  `/Applications/Xcode-beta.app` (build with
+  `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift build|test`;
   the machine's default `xcode-select` is still Command Line Tools). The
   package builds and tests green on the beta (Swift 6.4, macOS 27 SDK on the
   host, **44 tests in 9 suites**). First provider shipped on the branch:
@@ -141,13 +141,25 @@ Next steps, in order:
    `Configuration` per 339; the shared `LanguageModelError` mapper is extracted
    (`ProviderError(_:)`). **OAuth is automated** by the new **`VoltaSDKAuth`**
    module (`OAuthAccount`: `ASWebAuthenticationSession` + PKCE + Keychain +
-   silent refresh; `OAuthConfiguration`; `UserAccount(oauth:)` bridge) — kept
-   out of the headless core (AuthenticationServices/Keychain). The one
-   irreducible step stays the developer's: each app must be its own registered
-   OAuth client (client ID + redirect) — a shared/SDK-wide client is against
-   provider terms. **Still to do:** real streaming, reasoning level, resolve the
-   chain transcript round-trip, and **live validation on a device** with a
-   registered client / real key (all of Part 2 compiles only). Article draft:
+   silent refresh + granted-scope validation; `OAuthConfiguration` incl.
+   `additionalAuthorizationParameters`; `UserAccount(oauth:)` bridge) — kept
+   out of the headless core. The irreducible step stays the developer's: each
+   app is its own registered OAuth client. **VALIDATED LIVE against Google**
+   (July 2026, real client on the M2): sign-in → PKCE → token → Keychain all
+   work. Key findings: `ASWebAuthenticationSession` calls its completion on a
+   background XPC queue → a main-actor-inherited closure traps under Swift 6
+   dynamic isolation (fixed: `nonisolated` completion factory); Google needs
+   `access_type=offline` (else no refresh token) + `prompt=consent`; granular
+   consent can under-grant → validated at sign-in (`scopesNotGranted`).
+   **Gemini OAuth generation is provider-policy-gated:** `generativelanguage`
+   rejects user tokens regardless of scopes; the accepting endpoint
+   (`cloudcode-pa`, Gemini CLI's) is a private API not enable-able for
+   third-party client projects — `GeminiProvider` now has the dual transport
+   (key → Developer API, OAuth → Code Assist envelope) for contexts where it
+   is available, and user-account Gemini generation otherwise = the user's API
+   key. **Still to do:** final live answer via the key-path connect flow, real
+   streaming, reasoning level, resolve the chain transcript round-trip.
+   Article draft:
    `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.
