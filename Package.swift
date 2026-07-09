@@ -32,7 +32,7 @@ let package = Package(
         ),
         .target(
             name: "VoltaSDKDemoUI",
-            dependencies: ["VoltaSDK", "VoltaSDKUI"]
+            dependencies: ["VoltaSDK", "VoltaSDKUI", "VoltaSDKAuth"]
         ),
         .testTarget(
             name: "VoltaSDKTests",

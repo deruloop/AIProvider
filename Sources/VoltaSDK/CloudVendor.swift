@@ -16,10 +16,12 @@
 import Foundation
 
 /// The cloud vendor a developer key belongs to.
-public enum CloudVendor: String, Sendable, CaseIterable {
+public enum CloudVendor: String, Sendable, CaseIterable, Identifiable {
     case openAI = "OpenAI"
     case anthropic = "Anthropic"
     case gemini = "Google Gemini"
+
+    public var id: String { rawValue }
 
     /// Best-effort detection from the key format:
     /// `sk-ant-…` → Anthropic, `AIza…` → Google, `sk-…` → OpenAI.
