@@ -29,6 +29,10 @@ struct OAuthToken: Codable, Sendable {
     var accessToken: String
     var refreshToken: String?
     var expiresAt: Date?
+    /// What the provider says it actually granted (`scope` in the token
+    /// response), when it says anything. May be less than what was requested —
+    /// e.g. Google's granular consent.
+    var grantedScopes: [String]?
 
     /// Usable for at least another minute (or no expiry info at all).
     var isFresh: Bool {
@@ -42,6 +46,7 @@ private struct TokenResponse: Decodable {
     let access_token: String
     let refresh_token: String?
     let expires_in: Double?
+    let scope: String?
 }
 
 public final class OAuthAccount: @unchecked Sendable {
@@ -78,6 +83,13 @@ public final class OAuthAccount: @unchecked Sendable {
     /// Whether a token is on hand (it may still need a silent refresh).
     public var isSignedIn: Bool {
         lock.withLock { cached != nil }
+    }
+
+    /// The scopes the provider says the current token carries (`scope` from
+    /// the token response), when it reported them. Useful for diagnosing
+    /// under-granting (granular consent, silently stripped scopes).
+    public var grantedScopes: [String]? {
+        lock.withLock { cached?.grantedScopes }
     }
 
     /// Forget the account (local only).
@@ -130,6 +142,18 @@ public final class OAuthAccount: @unchecked Sendable {
             "client_id": config.clientID,
             "code_verifier": verifier,
         ])
+
+        // Fail LOUDLY at sign-in when the provider under-granted (granular
+        // consent, unregistered scope, …) instead of letting API calls fail
+        // later with "insufficient scopes". Only full-URL scopes are checked:
+        // shorthands like "openid"/"email" come back normalized under other
+        // names (e.g. …/auth/userinfo.email) and would false-positive.
+        if let granted = token.grantedScopes {
+            let missing = config.scopes.filter { $0.contains("://") && !granted.contains($0) }
+            guard missing.isEmpty else {
+                throw OAuthError.scopesNotGranted(missing: missing, granted: granted)
+            }
+        }
         store(token)
     }
 
@@ -152,30 +176,63 @@ public final class OAuthAccount: @unchecked Sendable {
         if !config.scopes.isEmpty {
             items.append(URLQueryItem(name: "scope", value: config.scopes.joined(separator: " ")))
         }
+        for (name, value) in config.additionalAuthorizationParameters.sorted(by: { $0.key < $1.key }) {
+            items.append(URLQueryItem(name: name, value: value))
+        }
         components.queryItems = items
         return components.url!
     }
 
     @MainActor
     private func present(authorizationURL: URL) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
+        // An empty/invalid scheme would precondition-trap inside
+        // ASWebAuthenticationSession — fail with a catchable error instead.
+        guard let scheme = config.callbackScheme, !scheme.isEmpty else {
+            throw OAuthError.cannotPresent
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            // The session's completion handler and a failed `start()` are not
+            // mutually exclusive — a cancelled/failed session can still invoke
+            // its completion. Resuming a checked continuation twice is a fatal
+            // trap (SWIFT TASK CONTINUATION MISUSE → EXC_BREAKPOINT, on
+            // whatever thread resumes second), so resumption is one-shot.
+            let resumeOnce = OneShotResume(continuation)
             let session = ASWebAuthenticationSession(
                 url: authorizationURL,
-                callback: .customScheme(config.callbackScheme ?? "")
-            ) { callbackURL, error in
-                if let callbackURL {
-                    continuation.resume(returning: callbackURL)
-                } else {
-                    continuation.resume(throwing: error ?? OAuthError.cancelled)
-                }
-            }
+                callback: .customScheme(scheme),
+                completionHandler: Self.sessionCompletion(resumeOnce)
+            )
             let anchorProvider = AnchorProvider()
             session.presentationContextProvider = anchorProvider
             session.prefersEphemeralWebBrowserSession = false
             anchor = anchorProvider
             liveSession = session
             if !session.start() {
-                continuation.resume(throwing: OAuthError.cannotPresent)
+                resumeOnce.resume(.failure(OAuthError.cannotPresent))
+            }
+        }
+    }
+
+    /// The session completion, built OUTSIDE any actor context — deliberately.
+    ///
+    /// Observed live (macOS 27 beta): `ASWebAuthenticationSession` invokes its
+    /// completion on a background XPC reply queue
+    /// (`com.apple.NSXPCConnection.m-user.com.apple.SafariLaunchAgent`), not
+    /// the main thread. A closure formed inside the `@MainActor present(_:)`
+    /// inherits main-actor isolation, and Swift 6's *dynamic* isolation check
+    /// then traps at closure entry — `dispatch_assert_queue` →
+    /// `_dispatch_assert_queue_fail` → `EXC_BREAKPOINT` — before a single line
+    /// of the body runs. Creating the closure in this nonisolated factory
+    /// makes it invocable from any queue; resuming the one-shot continuation
+    /// is thread-safe from anywhere.
+    private nonisolated static func sessionCompletion(
+        _ resumeOnce: OneShotResume
+    ) -> @Sendable (URL?, (any Error)?) -> Void {
+        { callbackURL, error in
+            if let callbackURL {
+                resumeOnce.resume(.success(callbackURL))
+            } else {
+                resumeOnce.resume(.failure(error ?? OAuthError.cancelled))
             }
         }
     }
@@ -205,7 +262,8 @@ public final class OAuthAccount: @unchecked Sendable {
         return OAuthToken(
             accessToken: decoded.access_token,
             refreshToken: decoded.refresh_token,
-            expiresAt: decoded.expires_in.map { Date(timeIntervalSinceNow: $0) }
+            expiresAt: decoded.expires_in.map { Date(timeIntervalSinceNow: $0) },
+            grantedScopes: decoded.scope.map { $0.split(separator: " ").map(String.init) }
         )
     }
 
@@ -225,6 +283,27 @@ public final class OAuthAccount: @unchecked Sendable {
         var components = URLComponents()
         components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
         return Data((components.percentEncodedQuery ?? "").utf8)
+    }
+}
+
+// MARK: - One-shot continuation
+
+/// Wraps a checked continuation so that only the FIRST resume wins — any later
+/// attempt is silently dropped instead of trapping the process.
+private final class OneShotResume: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<URL, any Error>?
+
+    init(_ continuation: CheckedContinuation<URL, any Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ result: Result<URL, any Error>) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
     }
 }
 
