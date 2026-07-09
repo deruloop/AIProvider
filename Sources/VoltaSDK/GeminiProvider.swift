@@ -82,12 +82,6 @@ public struct GeminiProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
-        let endpoint = baseURL.appendingPathComponent("models/\(model):generateContent")
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-
         // App-supplied history (D12) → user/model turns → current prompt.
         var contents: [GenerateRequest.Content] = []
         for turn in history {
@@ -98,23 +92,124 @@ public struct GeminiProvider: ModelProvider {
         }
         contents.append(.init(role: "user", parts: [.init(text: prompt)]))
 
-        do {
-            request.httpBody = try JSONEncoder().encode(
-                GenerateRequest(
-                    systemInstruction: (instructions?.isEmpty == false)
-                        ? .init(role: nil, parts: [.init(text: instructions!)])
-                        : nil,
-                    contents: contents,
-                    generationConfig: .init(
-                        temperature: temperature,
-                        maxOutputTokens: maxTokens
-                    )
-                )
+        let body = GenerateRequest(
+            systemInstruction: (instructions?.isEmpty == false)
+                ? .init(role: nil, parts: [.init(text: instructions!)])
+                : nil,
+            contents: contents,
+            generationConfig: .init(
+                temperature: temperature,
+                maxOutputTokens: maxTokens
             )
+        )
+
+        // Credential detection, D15-style: a Google API key always starts with
+        // "AIza" and speaks the Developer API (generativelanguage). Anything
+        // else is an OAuth access token (user-account path, "ya29.…") — and
+        // OAuth tokens are a DIFFERENT TRANSPORT, not just a different header:
+        // generativelanguage rejects them with ACCESS_TOKEN_SCOPE_INSUFFICIENT
+        // regardless of granted scopes (observed live). The endpoint that
+        // accepts user tokens (cloud-platform scope) is the Code Assist front
+        // end, cloudcode-pa.googleapis.com — the same models behind Google's
+        // own Gemini CLI sign-in, with its {model, project, request} envelope.
+        if apiKey.hasPrefix("AIza") {
+            return try await developerAPIRespond(body)
+        }
+        return try await codeAssistRespond(body)
+    }
+
+    // MARK: Developer API transport (API key)
+
+    private func developerAPIRespond(_ body: GenerateRequest) async throws -> String {
+        let endpoint = baseURL.appendingPathComponent("models/\(model):generateContent")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+
+        do {
+            request.httpBody = try JSONEncoder().encode(body)
         } catch {
             throw ProviderError.encoding("Request encoding failed: \(error.localizedDescription)")
         }
 
+        let data = try await send(request)
+        return try Self.extractText(try Self.decode(GenerateResponse.self, from: data))
+    }
+
+    // MARK: Code Assist transport (OAuth user token)
+    //
+    // The endpoint behind Google's own Gemini CLI "Sign in with Google": it
+    // accepts cloud-platform user tokens and fronts the same Gemini models
+    // (free tier included). Protocol from the open-source Gemini CLI:
+    // a loadCodeAssist/onboardUser handshake yields the managed project, then
+    // generateContent takes {"model", "project", "request"} and returns
+    // {"response": <standard GenerateContentResponse>}.
+
+    private static let codeAssistBase = URL(string: "https://cloudcode-pa.googleapis.com/v1internal")!
+
+    private func codeAssistRespond(_ body: GenerateRequest) async throws -> String {
+        let project = try await codeAssistProject()
+        var request = makeCodeAssistRequest(action: "generateContent")
+        do {
+            request.httpBody = try JSONEncoder().encode(
+                CodeAssistGenerateRequest(model: model, project: project, request: body)
+            )
+        } catch {
+            throw ProviderError.encoding("Request encoding failed: \(error.localizedDescription)")
+        }
+        let data = try await send(request)
+        let envelope = try Self.decode(CodeAssistGenerateResponse.self, from: data)
+        guard let inner = envelope.response else { throw ProviderError.emptyResponse }
+        return try Self.extractText(inner)
+    }
+
+    /// Resolves the user's managed Code Assist project: ask (`loadCodeAssist`),
+    /// and if the account was never onboarded, run the free-tier onboarding
+    /// once and ask again.
+    private func codeAssistProject() async throws -> String {
+        if let project = try await loadCodeAssistProject() { return project }
+
+        var onboard = makeCodeAssistRequest(action: "onboardUser")
+        onboard.httpBody = try? JSONEncoder().encode(
+            OnboardUserRequest(tierId: "free-tier", metadata: .init())
+        )
+        let lro = try? Self.decode(OnboardLRO.self, from: try await send(onboard))
+        if let project = lro?.response?.cloudaicompanionProject?.id { return project }
+
+        // Onboarding is a long-running operation; give it a beat, ask again.
+        try? await Task.sleep(for: .seconds(2))
+        if let project = try await loadCodeAssistProject() { return project }
+
+        throw ProviderError.api(
+            message: "Google Code Assist did not return a project for this account — the OAuth token is valid, but the account isn't onboarded to the Gemini free tier yet.",
+            code: "code-assist-onboarding"
+        )
+    }
+
+    private func loadCodeAssistProject() async throws -> String? {
+        var request = makeCodeAssistRequest(action: "loadCodeAssist")
+        request.httpBody = try? JSONEncoder().encode(LoadCodeAssistRequest(metadata: .init()))
+        let data = try await send(request)
+        return (try? Self.decode(LoadCodeAssistResponse.self, from: data))?.cloudaicompanionProject
+    }
+
+    private func makeCodeAssistRequest(action: String) -> URLRequest {
+        // v1internal endpoints use the ":action" form on the base path.
+        var request = URLRequest(
+            url: URL(string: Self.codeAssistBase.absoluteString + ":" + action)!
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    // MARK: Shared transport plumbing
+
+    /// Sends the request and maps HTTP failures onto `ProviderError` —
+    /// identical semantics for both transports.
+    private func send(_ request: URLRequest) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
@@ -132,8 +227,16 @@ public struct GeminiProvider: ModelProvider {
 
         switch http.statusCode {
         case 200...299:
-            break
+            guard !data.isEmpty else { throw ProviderError.emptyResponse }
+            return data
         case 401, 403:
+            // Surface Google's explanation when it has one — e.g. a 403
+            // "…API has not been used in project …" is far more actionable
+            // than a generic auth failure.
+            if let envelope = try? JSONDecoder().decode(GeminiErrorEnvelope.self, from: data),
+               !envelope.error.message.isEmpty {
+                throw ProviderError.api(message: envelope.error.message, code: envelope.error.status)
+            }
             throw ProviderError.unauthorized
         case 429:
             let retryAfter = RetryAfterParser.parse(http.value(forHTTPHeaderField: "retry-after"))
@@ -151,21 +254,22 @@ public struct GeminiProvider: ModelProvider {
             let raw = String(data: data, encoding: .utf8) ?? "<unreadable body>"
             throw ProviderError.api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
         }
+    }
 
-        guard !data.isEmpty else { throw ProviderError.emptyResponse }
-
+    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
-            let decoded = try JSONDecoder().decode(GenerateResponse.self, from: data)
-            guard let text = decoded.candidates?.first?.content.parts.first?.text,
-                  !text.isEmpty else {
-                throw ProviderError.emptyResponse
-            }
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch let providerError as ProviderError {
-            throw providerError
+            return try JSONDecoder().decode(type, from: data)
         } catch {
             throw ProviderError.decoding(error.localizedDescription)
         }
+    }
+
+    private static func extractText(_ response: GenerateResponse) throws -> String {
+        guard let text = response.candidates?.first?.content.parts.first?.text,
+              !text.isEmpty else {
+            throw ProviderError.emptyResponse
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -211,5 +315,45 @@ private struct GeminiErrorEnvelope: Decodable {
         let code: Int
         let message: String
         let status: String?
+    }
+}
+
+// MARK: - Code Assist DTOs (protocol from the open-source Gemini CLI)
+
+private struct CodeAssistGenerateRequest: Encodable {
+    let model: String
+    let project: String
+    let request: GenerateRequest
+}
+
+private struct CodeAssistGenerateResponse: Decodable {
+    let response: GenerateResponse?
+}
+
+private struct ClientMetadata: Encodable {
+    var ideType = "IDE_UNSPECIFIED"
+    var platform = "PLATFORM_UNSPECIFIED"
+    var pluginType = "GEMINI"
+}
+
+private struct LoadCodeAssistRequest: Encodable {
+    let metadata: ClientMetadata
+}
+
+private struct LoadCodeAssistResponse: Decodable {
+    let cloudaicompanionProject: String?
+}
+
+private struct OnboardUserRequest: Encodable {
+    let tierId: String
+    let metadata: ClientMetadata
+}
+
+private struct OnboardLRO: Decodable {
+    let done: Bool?
+    let response: Response?
+    struct Response: Decodable {
+        let cloudaicompanionProject: Project?
+        struct Project: Decodable { let id: String? }
     }
 }
