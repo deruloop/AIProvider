@@ -157,9 +157,14 @@ Next steps, in order:
    third-party client projects — `GeminiProvider` now has the dual transport
    (key → Developer API, OAuth → Code Assist envelope) for contexts where it
    is available, and user-account Gemini generation otherwise = the user's API
-   key. **Still to do:** final live answer via the key-path connect flow, real
-   streaming, reasoning level, resolve the chain transcript round-trip.
-   Article draft:
+   key. **The official vendor route is the vendor's own package** (Gemini via
+   Google's Firebase SDK; Anthropic's Claude package) — supported via the new
+   public **`AIConfiguration.customModels`** plug-in point
+   (`CustomLanguageModel` wraps any Apple `LanguageModel` into the chain; the
+   internal `LanguageModelProvider` is existential-based; type-erased config
+   storage keeps the iOS-27 type behind a gated accessor). **Still to do:**
+   final live answer via the key-path connect flow, real streaming, reasoning
+   level, resolve the chain transcript round-trip. Article draft:
    `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.

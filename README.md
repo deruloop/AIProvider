@@ -389,6 +389,34 @@ one revocation away from breaking every app — so "enable a provider" means
 after that. (`VoltaSDKAuth` uses AuthenticationServices/Keychain, so it's a
 separate product from the headless core.)
 
+One provider-policy note from live testing: **Gemini *generation* doesn't
+accept personal-OAuth tokens from third-party clients** (Google reserves that
+for its own tooling), so a user-connected Gemini account uses their API key.
+Google's official route for Gemini in apps is its **Firebase package** — which
+plugs in below.
+
+### Official vendor packages (`customModels`)
+
+Vendors ship their own conformances to Apple's `LanguageModel` protocol —
+Google exposes **Gemini via the Firebase SDK**, Anthropic publishes a Claude
+package. Anything conforming to `LanguageModel` drops into the chain as one
+more provider, no VoltaSDK release needed:
+
+```swift
+if #available(iOS 27.0, macOS 27.0, *) {
+    config.customModels = [CustomLanguageModel(
+        vendorModel,                          // however the vendor exposes it
+        identifier: ProviderIdentifier("gemini-firebase"),
+        privacyLevel: .external
+    )]
+}
+```
+
+The model shows up in `providerStatuses()`, the picker, and provenance under
+the identifier you give it; its `privacyLevel` drives the same disclosure
+policy as every other provider. Custom models trail the built-in providers in
+the chain order and are never auto-selected.
+
 ## Demo apps
 
 Both demos are signed Xcode apps sharing the same UI (`VoltaSDKDemoUI`), so

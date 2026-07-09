@@ -81,6 +81,18 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   token response are validated at sign-in — under-granting (granular consent,
   stripped scopes) throws `scopesNotGranted(missing:granted:)` at the door
   instead of failing later at the first API call.
+- **Vendor packages plug in: `AIConfiguration.customModels` (iOS 27).** The
+  official vendor route Apple announced — Google ships Gemini for the
+  Foundation Models framework via its Firebase SDK, Anthropic publishes a
+  Claude package — lands in the chain through a new public plug-in point: any
+  conformance to Apple's `LanguageModel` protocol, wrapped as
+  `CustomLanguageModel(model, identifier:, privacyLevel:)`, becomes one more
+  provider (statuses, picker, provenance, privacy disclosure included), no
+  VoltaSDK release needed per vendor. Custom models trail the built-in
+  providers in the prefer chains and are never auto-selected. (Implementation:
+  the internal `LanguageModelProvider` wrapper is now existential-based, and
+  the config stores entries type-erased so the iOS-27-only type stays behind an
+  availability-gated accessor.)
 - **Gemini: credential-aware dual transport.** A Google API key (`AIza…`)
   speaks the Developer API (`generativelanguage`, `x-goog-api-key` header) as
   before. An OAuth user token turned out to need a *different transport*, not
