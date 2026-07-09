@@ -24,18 +24,27 @@ import Foundation
 import FoundationModels
 
 @available(iOS 27.0, macOS 27.0, *)
-struct LanguageModelProvider<M: LanguageModel>: ModelProvider {
+struct LanguageModelProvider: ModelProvider {
 
     let identifier: ProviderIdentifier
     let privacyLevel: PrivacyLevel
 
-    private let model: M
+    /// Existential on purpose: this wrapper serves both VoltaSDK's own
+    /// `CloudAccountLanguageModel` and vendor-shipped models plugged in via
+    /// `AIConfiguration.customModels` (`LanguageModelSession(model:)` opens
+    /// the existential at the call site).
+    private let model: any LanguageModel
     /// Whether the backing credential/account is present. A LanguageModel has
     /// no generic availability notion, so the builder supplies it (for a
     /// user-account model: "is a key/token connected").
     private let connected: Bool
 
-    init(identifier: ProviderIdentifier, privacyLevel: PrivacyLevel, model: M, connected: Bool) {
+    init(
+        identifier: ProviderIdentifier,
+        privacyLevel: PrivacyLevel,
+        model: any LanguageModel,
+        connected: Bool
+    ) {
         self.identifier = identifier
         self.privacyLevel = privacyLevel
         self.model = model

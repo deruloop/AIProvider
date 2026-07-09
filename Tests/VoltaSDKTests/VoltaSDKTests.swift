@@ -628,6 +628,54 @@ struct UserAccountProviderTests {
     }
 }
 
+// MARK: - Custom vendor models (iOS 27)
+
+@Suite("Custom vendor models (iOS 27)")
+struct CustomLanguageModelTests {
+
+    @Test("No custom models configured → none built, regardless of OS")
+    func noneConfigured() {
+        #expect(AIOrchestrator.buildCustomModelProviders(from: AIConfiguration()).isEmpty)
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    @Test("A vendor LanguageModel joins the chain with its declared identity")
+    func vendorModelJoinsChain() async {
+        var config = AIConfiguration()
+        config.enableOnDevice = false
+        config.enablePrivateCloudCompute = false
+        // Any LanguageModel works — our own front-door model stands in for a
+        // vendor package (e.g. Firebase's Gemini).
+        config.customModels = [CustomLanguageModel(
+            CloudAccountLanguageModel(vendor: .gemini, apiKey: "stand-in"),
+            identifier: ProviderIdentifier("firebase-gemini"),
+            privacyLevel: .external
+        )]
+        let statuses = await AIOrchestrator(configuration: config).providerStatuses()
+        #expect(statuses.map(\.identifier) == [ProviderIdentifier("firebase-gemini")])
+        #expect(statuses.first?.privacyLevel == .external)
+        #expect(statuses.first?.availability == .available)
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    @Test("Custom models trail the chain in prefer modes, absent in only modes")
+    func chainPlacement() async {
+        var config = AIConfiguration()
+        config.developerKey = "sk-test"
+        config.customModels = [CustomLanguageModel(
+            CloudAccountLanguageModel(vendor: .anthropic, apiKey: "stand-in"),
+            identifier: ProviderIdentifier("vendor-claude"),
+            privacyLevel: .external
+        )]
+        let prefer = await AIOrchestrator(configuration: config).providerStatuses().map(\.identifier)
+        #expect(prefer == [.onDevice, .privateCloudCompute, .openAI, ProviderIdentifier("vendor-claude")])
+
+        config.preference = .developerKeyOnly
+        let only = await AIOrchestrator(configuration: config).providerStatuses().map(\.identifier)
+        #expect(only == [.openAI])
+    }
+}
+
 // MARK: - OAuth (VoltaSDKAuth)
 
 @Suite("OAuth PKCE")

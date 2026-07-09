@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import FoundationModels
 import Synchronization
 
 // MARK: - Selection preference
@@ -77,6 +78,32 @@ public struct UserAccount: Sendable {
     }
 }
 
+/// A vendor- or app-supplied Apple `LanguageModel` (iOS 27) to place in the
+/// fallback chain — the front door for the OFFICIAL vendor packages Apple
+/// announced (e.g. Gemini via Google's Firebase package, Anthropic's Claude
+/// package) without VoltaSDK needing a release per vendor. Anything that
+/// conforms to `LanguageModel` slots in; you say who it is and how private it
+/// is, and it becomes one more provider the chain can resolve to.
+@available(iOS 27.0, macOS 27.0, *)
+public struct CustomLanguageModel: Sendable {
+    /// How the provider shows up in statuses, pickers, and provenance.
+    public var identifier: ProviderIdentifier
+    /// Where its data goes — drives the privacy-disclosure policy (D7/D10).
+    public var privacyLevel: PrivacyLevel
+    /// The model itself, however the vendor exposes it.
+    public var model: any LanguageModel
+
+    public init(
+        _ model: any LanguageModel,
+        identifier: ProviderIdentifier,
+        privacyLevel: PrivacyLevel
+    ) {
+        self.model = model
+        self.identifier = identifier
+        self.privacyLevel = privacyLevel
+    }
+}
+
 public struct AIConfiguration: Sendable {
     /// Enables the on-device model (requires Apple Intelligence on the device).
     public var enableOnDevice: Bool = true
@@ -95,6 +122,21 @@ public struct AIConfiguration: Sendable {
     /// these are external-privacy providers and never auto-selected by the
     /// `ModelSelector` (the user must connect the account first).
     public var userAccounts: [UserAccount] = []
+
+    /// Type-erased storage for `customModels` — a stored property cannot be
+    /// availability-gated, the accessor below is.
+    var _customModels: [any Sendable] = []
+
+    /// Vendor- or app-supplied `LanguageModel`s to add to the chain (iOS 27+):
+    /// the plug-in point for the official vendor packages (Gemini via
+    /// Google's Firebase package, Anthropic's Claude package, or your own
+    /// conformance). They trail the built-in providers in the prefer chains
+    /// and are never auto-selected.
+    @available(iOS 27.0, macOS 27.0, *)
+    public var customModels: [CustomLanguageModel] {
+        get { _customModels.compactMap { $0 as? CustomLanguageModel } }
+        set { _customModels = newValue }
+    }
 
     /// Cloud provider developer key. Accepts OpenAI, Anthropic (Claude),
     /// or Google (Gemini) keys — the vendor is auto-detected from the key
@@ -402,25 +444,43 @@ public actor AIOrchestrator {
         let onDevice: (any ModelProvider)? = config.enableOnDevice ? OnDeviceProvider() : nil
         let pcc = buildPrivateCloudComputeProvider(from: config)
         let cloud = buildCloudProvider(from: config)
-        // User-account providers (iOS 27) are additional external options the
-        // user connects; they trail the app's own providers in the default
+        // User-account providers and vendor-shipped custom models (iOS 27) are
+        // additional options; they trail the app's own providers in the default
         // order, and the user can re-lead the chain via the picker.
         let userAccounts = buildUserAccountProviders(from: config)
+        let customModels = buildCustomModelProviders(from: config)
 
         // Ordered by privacy: on-device (max) → PCC (.appleCloud) → developer
-        // key (external) → user accounts (external). PCC is a fallback tier, not
-        // a destination of its own, so it (and user accounts) join the two
-        // "prefer" chains but not the strict "only" modes.
+        // key (external) → user accounts → custom models. PCC is a fallback
+        // tier, not a destination of its own, so it (and the iOS 27 extras)
+        // join the two "prefer" chains but not the strict "only" modes.
         switch config.preference {
         case .preferOnDevice:
-            return [onDevice, pcc, cloud].compactMap { $0 } + userAccounts
+            return [onDevice, pcc, cloud].compactMap { $0 } + userAccounts + customModels
         case .preferDeveloperKey:
-            return [cloud, pcc, onDevice].compactMap { $0 } + userAccounts
+            return [cloud, pcc, onDevice].compactMap { $0 } + userAccounts + customModels
         case .onDeviceOnly:
             return [onDevice].compactMap { $0 }
         case .developerKeyOnly:
             return [cloud].compactMap { $0 }
         }
+    }
+
+    /// Wraps each vendor-/app-supplied `LanguageModel` (iOS 27) into the chain
+    /// — the same single-gate pattern as the other iOS 27 tiers (D14).
+    static func buildCustomModelProviders(from config: AIConfiguration) -> [any ModelProvider] {
+        guard !config._customModels.isEmpty else { return [] }
+        if #available(iOS 27.0, macOS 27.0, *) {
+            return config.customModels.map { entry in
+                LanguageModelProvider(
+                    identifier: entry.identifier,
+                    privacyLevel: entry.privacyLevel,
+                    model: entry.model,
+                    connected: true
+                )
+            }
+        }
+        return []
     }
 
     /// Builds a chain provider for each configured user account (iOS 27+),
