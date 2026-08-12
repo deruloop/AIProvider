@@ -81,6 +81,18 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   token response are validated at sign-in — under-granting (granular consent,
   stripped scopes) throws `scopesNotGranted(missing:granted:)` at the door
   instead of failing later at the first API call.
+- **Demo connect flow is key-only; sign-in removed.** Verified across all three
+  vendors (2026 policy): none permits subscription-backed generation on a
+  personal sign-in for third-party apps — Google deprecated the per-user-quota
+  scope and bans proxying its CLI client; Anthropic's terms restrict Claude
+  Free/Pro/Max OAuth tokens to its own products (its sanctioned alternative is
+  Agent SDK credits — i.e. *their* SDK); OpenAI's "Sign in with ChatGPT" shares
+  identity, not plan-backed inference. The demo's connect sheet therefore
+  offers only the user's own API key; the vendor's official package is the
+  sanctioned sign-in route and joins the chain via `customModels`.
+  `VoltaSDKAuth` remains in the package as validated, general-purpose OAuth
+  machinery (for providers/deployments where per-app clients are permitted);
+  the demo no longer depends on it.
 - **Vendor packages plug in: `AIConfiguration.customModels` (iOS 27).** The
   official vendor route Apple announced — Google ships Gemini for the
   Foundation Models framework via its Firebase SDK, Anthropic publishes a

@@ -11,7 +11,17 @@
 //   - USER side: the chat on top and the ModelSelector below it — the user
 //     picks a model; free providers activate immediately, gated ones defer to
 //     the app's own flow (a paywall for the developer-key cloud model; a
-//     connect/OAuth flow for a user-account vendor).
+//     connect flow for a user-account vendor).
+//
+//  Why the connect flow is key-only (verified live + against vendor policy,
+//  2026): none of the big three permits third-party apps to run
+//  subscription-backed generation on a user's personal sign-in. Google
+//  deprecated the per-user-quota scope and bans proxying its CLI client;
+//  Anthropic's terms restrict Claude Free/Pro/Max OAuth tokens to its own
+//  products; OpenAI's "Sign in with ChatGPT" shares identity, not plan-backed
+//  inference. The sanctioned "user account" routes are the user's own API
+//  key (this sheet) and the vendor's official package, which plugs into the
+//  chain via `AIConfiguration.customModels`.
 //
 //  Adaptive layout:
 //   - macOS: HSplitView (developer | user)
@@ -21,7 +31,6 @@
 import SwiftUI
 import VoltaSDK
 import VoltaSDKUI
-import VoltaSDKAuth
 
 /// Privacy-downgrade events collected by the `.notify` policy, surfaced
 /// in the test UI.
@@ -37,11 +46,6 @@ public struct DemoRootView: View {
     @State private var apiKey = ""
     @State private var model = ""
     @State private var offeredVendors: Set<CloudVendor> = []
-    /// The app's registered Google OAuth client ID (from Google Cloud Console)
-    /// — the one step no SDK can do for you. With it, the Gemini row's
-    /// "Sign in" runs REAL managed OAuth via VoltaSDKAuth. Persisted locally
-    /// (UserDefaults) so it's pasted once, never committed anywhere.
-    @AppStorage("volta.demo.googleOAuthClientID") private var googleOAuthClientID = ""
     @State private var notifyDowngrades = true
 
     /// Snapshot of the last *applied* developer settings. The orchestrator is
@@ -54,14 +58,10 @@ public struct DemoRootView: View {
     @State private var userHasSubscription = true
     /// What the end user committed in the ModelSelector.
     @State private var userSelection: ProviderIdentifier?
-    /// Keys the user pasted in the connect flow (the manual path).
+    /// Keys the user pasted in the connect flow.
     @State private var connectedTokens: [CloudVendor: String] = [:]
-    /// Accounts connected via REAL managed OAuth (VoltaSDKAuth) — the token
-    /// lives in the Keychain and refreshes silently.
-    @State private var oauthAccounts: [CloudVendor: OAuthAccount] = [:]
-    @State private var connectError: String?
 
-    // Connect flow (a user-account row → sign-in / API key). Setting the
+    // Connect flow (a user-account row → the user's own API key). Setting the
     // vendor presents the sheet via `.sheet(item:)`, so the vendor is always
     // available when the sheet renders.
     @State private var pendingConnectVendor: CloudVendor?
@@ -83,7 +83,6 @@ public struct DemoRootView: View {
         var apiKey = ""
         var model = ""
         var offeredVendors: Set<CloudVendor> = []
-        var googleOAuthClientID = ""
         var notifyDowngrades = true
     }
 
@@ -94,7 +93,6 @@ public struct DemoRootView: View {
             apiKey: apiKey,
             model: model,
             offeredVendors: offeredVendors,
-            googleOAuthClientID: googleOAuthClientID,
             notifyDowngrades: notifyDowngrades
         )
     }
@@ -183,33 +181,16 @@ public struct DemoRootView: View {
                             } else {
                                 offeredVendors.remove(vendor)
                                 connectedTokens[vendor] = nil
-                                // Fully sign out (Keychain too) so re-offering
-                                // runs a fresh sign-in — e.g. after a scope change.
-                                oauthAccounts[vendor]?.signOut()
-                                oauthAccounts[vendor] = nil
                             }
                         }
                     ))
-                    if connectedTokens[vendor] != nil || oauthAccounts[vendor] != nil {
-                        Label(
-                            oauthAccounts[vendor] != nil
-                                ? "Connected by the user (OAuth)"
-                                : "Connected by the user",
-                            systemImage: "checkmark.circle"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                    if connectedTokens[vendor] != nil {
+                        Label("Connected by the user", systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
                     }
                 }
-                if offeredVendors.contains(.gemini) {
-                    TextField("Google OAuth client ID (…apps.googleusercontent.com)",
-                              text: $googleOAuthClientID)
-                        .autocorrectionDisabled()
-                    Text("Your app's registered OAuth client from Google Cloud Console — the one step no SDK can do for you. With it, the Gemini row's \"Sign in\" runs the real managed OAuth flow (VoltaSDKAuth).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("Developer's choice: which vendors to expose. Each offered vendor appears in the picker; the USER connects their own account by tapping the row (sign-in or their key). To route a call to it, turn the other providers off.")
+                Text("Developer's choice: which vendors to expose. Each offered vendor appears in the picker; the USER connects their own account by tapping the row and entering their key (vendors don't permit subscription sign-in for third-party apps — the official vendor packages plug in via customModels instead). To route a call to it, turn the other providers off.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -304,7 +285,7 @@ public struct DemoRootView: View {
                         return .activate
                     }
                     // A user account: if the user has already connected it, use
-                    // it; otherwise run the connect flow (sign-in / API key) and
+                    // it; otherwise run the connect flow (their API key) and
                     // commit when it succeeds.
                     if provider.rawValue.hasPrefix("user-") {
                         guard let vendor = CloudVendor.allCases.first(where: {
@@ -312,9 +293,7 @@ public struct DemoRootView: View {
                         }) else {
                             return .deny(message: "Unknown account vendor")
                         }
-                        if connectedTokens[vendor] != nil || oauthAccounts[vendor] != nil {
-                            return .activate
-                        }
+                        if connectedTokens[vendor] != nil { return .activate }
                         pendingConnectVendor = vendor   // presents the connect sheet
                         return .deferred
                     }
@@ -367,10 +346,12 @@ public struct DemoRootView: View {
     }
 
     /// The user-side "connect your account" flow, reached by tapping a
-    /// user-account row. How the app connects the account is its own choice —
-    /// like Xcode, it can offer sign-in and/or a key. This demo wires the key
-    /// path; real OAuth (e.g. Firebase for Gemini) needs the app's own
-    /// infrastructure, so "Sign in" is shown but stubbed.
+    /// user-account row: the user provides their own API key, billed to them.
+    /// There is deliberately NO "Sign in with <Vendor>" here — none of the
+    /// big three permits subscription-backed generation on a personal sign-in
+    /// for third-party apps (see the header note); the official vendor
+    /// packages are the sanctioned sign-in route and join the chain via
+    /// `AIConfiguration.customModels`.
     private func connectSheet(_ vendor: CloudVendor) -> some View {
         VStack(spacing: 14) {
             Image(systemName: "person.crop.circle.badge.plus")
@@ -379,41 +360,14 @@ public struct DemoRootView: View {
             Text("Connect your \(vendor.rawValue) account")
                 .font(.title2.bold())
                 .multilineTextAlignment(.center)
-            Text("The framework only needs a token provider — your app picks how to get it. Both paths below are what a real app would offer.")
+            Text("Paste your own \(vendor.rawValue) API key — usage is billed to you, not the app. The key stays on this device.")
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
-            // REAL managed OAuth (VoltaSDKAuth) — live for Gemini once the
-            // developer supplies their registered Google client ID; the other
-            // vendors show the same button, enabled when their client exists.
-            let oauthReady = vendor == .gemini && !applied.googleOAuthClientID.isEmpty
-            Button {
-                Task { await signIn(vendor: vendor) }
-            } label: {
-                Label("Sign in with \(vendor.rawValue)…", systemImage: "person.crop.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(!oauthReady)
-            Text(oauthReady
-                 ? "Runs the real OAuth flow: sign-in window, PKCE, token exchange, Keychain."
-                 : "OAuth sign-in — enable by registering your app with the provider and entering the client ID on the Developer side (Google client ID for Gemini).")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if let connectError {
-                Text(connectError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Divider()
-
-            SecureField("Provide an API key", text: $connectKey)
+            SecureField("Your \(vendor.rawValue) API key", text: $connectKey)
                 .textFieldStyle(.roundedBorder)
-            Button("Connect with key") {
+            Button("Connect") {
                 let token = connectKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !token.isEmpty else { return }
                 connectedTokens[vendor] = token
@@ -437,65 +391,6 @@ public struct DemoRootView: View {
         #endif
     }
 
-    // MARK: Managed OAuth (VoltaSDKAuth)
-
-    /// Google's standard OAuth endpoints. For a native client the redirect is
-    /// the REVERSED client ID as a custom scheme — no secret, pure PKCE.
-    private func googleOAuthConfiguration(clientID: String) -> OAuthConfiguration? {
-        let suffix = ".apps.googleusercontent.com"
-        guard clientID.hasSuffix(suffix) else { return nil }
-        let reversed = "com.googleusercontent.apps." + clientID.dropLast(suffix.count)
-        guard let redirect = URL(string: "\(reversed):/oauth2redirect") else { return nil }
-        return OAuthConfiguration(
-            authorizationEndpoint: URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!,
-            tokenEndpoint: URL(string: "https://oauth2.googleapis.com/token")!,
-            clientID: clientID,
-            redirectURI: redirect,
-            // Learned live: OAuth Gemini generation is per-ENDPOINT, not
-            // per-product. generativelanguage.googleapis.com (Developer API)
-            // rejects user tokens for generateContent regardless of granted
-            // scopes; the endpoint that accepts them is the Code Assist front
-            // end (cloudcode-pa.googleapis.com — what Google's own Gemini CLI
-            // uses after "Sign in with Google"), with exactly this
-            // cloud-platform scope. GeminiProvider routes OAuth tokens there
-            // automatically.
-            scopes: ["https://www.googleapis.com/auth/cloud-platform", "openid", "email"],
-            // Google specifics: without access_type=offline no refresh token is
-            // ever issued (the session would die after ~1h); prompt=consent
-            // re-shows the granular consent screen so a newly added scope can
-            // actually be ticked and granted.
-            additionalAuthorizationParameters: [
-                "access_type": "offline",
-                "prompt": "consent",
-            ]
-        )
-    }
-
-    /// Runs the REAL managed OAuth flow for the vendor and, on success,
-    /// connects the account and commits the selection.
-    @MainActor
-    private func signIn(vendor: CloudVendor) async {
-        connectError = nil
-        guard vendor == .gemini,
-              let config = googleOAuthConfiguration(clientID: applied.googleOAuthClientID)
-        else {
-            connectError = "No registered OAuth client for \(vendor.rawValue)."
-            return
-        }
-        let account = OAuthAccount(vendor: vendor, configuration: config)
-        do {
-            try await account.signIn()      // sign-in window → PKCE → token → Keychain
-            print("VoltaSDKAuth signed in. Granted scopes: \(account.grantedScopes ?? ["(not reported)"])")
-            oauthAccounts[vendor] = account
-            rebuild()
-            userSelection = .userAccount(vendor)   // commit the choice
-            pendingConnectVendor = nil              // dismisses the sheet
-        } catch {
-            connectError = "Sign-in failed: \(error)"
-            print("VoltaSDKAuth sign-in error:\n\(error)")   // full text in the Xcode console
-        }
-    }
-
     // MARK: Configuration
 
     /// Commit the developer form: snapshot it and rebuild the orchestrator.
@@ -505,7 +400,7 @@ public struct DemoRootView: View {
     }
 
     /// Build the orchestrator from the last *applied* developer settings plus
-    /// runtime state (connected tokens, the user's committed selection).
+    /// runtime state (connected keys, the user's committed selection).
     private func rebuild() {
         let log = downgradeLog
         var config = AIConfiguration()
@@ -513,15 +408,11 @@ public struct DemoRootView: View {
         config.enablePrivateCloudCompute = applied.enablePrivateCloudCompute
         config.developerKey = applied.apiKey.isEmpty ? nil : applied.apiKey
         config.developerKeyModel = applied.model.isEmpty ? nil : applied.model
-        // Each offered vendor becomes a selectable row. An OAuth-connected
-        // account uses the managed token (Keychain + silent refresh);
-        // otherwise the token provider carries whatever key the user pasted.
+        // Each offered vendor becomes a selectable row; its token provider
+        // carries whatever key the user connected (empty until they do).
         config.userAccounts = applied.offeredVendors
             .sorted { $0.rawValue < $1.rawValue }
             .map { vendor in
-                if let oauth = oauthAccounts[vendor] {
-                    return UserAccount(oauth: oauth)
-                }
                 let token = connectedTokens[vendor] ?? ""
                 return UserAccount(vendor: vendor, isConnected: true, token: { token })
             }

@@ -157,7 +157,13 @@ Next steps, in order:
    third-party client projects — `GeminiProvider` now has the dual transport
    (key → Developer API, OAuth → Code Assist envelope) for contexts where it
    is available, and user-account Gemini generation otherwise = the user's API
-   key. **The official vendor route is the vendor's own package** (Gemini via
+   key. **Cross-vendor verdict (verified online, July 2026): the same policy
+   holds for all three** — Anthropic restricts Claude Free/Pro/Max OAuth to its
+   own products (sanctioned alternative: Agent SDK credits, i.e. *their* SDK);
+   OpenAI's "Sign in with ChatGPT" is identity-only. The demo's connect flow is
+   therefore **key-only** (sign-in removed; `VoltaSDKAuth` retained as
+   general-purpose machinery, demo no longer depends on it).
+   **The official vendor route is the vendor's own package** (Gemini via
    Google's Firebase SDK; Anthropic's Claude package) — supported via the new
    public **`AIConfiguration.customModels`** plug-in point
    (`CustomLanguageModel` wraps any Apple `LanguageModel` into the chain; the
