@@ -74,7 +74,35 @@ public struct DemoRootView: View {
     @State private var orchestrator = AIOrchestrator(configuration: AIConfiguration())
     @State private var downgradeLog = DowngradeLog()
 
-    public init() {}
+    // MARK: Vendor package (customModels) — supplied by the HOST APP
+
+    /// Display name for the vendor-package section (nil = section hidden).
+    private let vendorPackageName: String?
+    /// Type-erased `@Sendable (String) -> [CustomLanguageModel]` — the app
+    /// builds the vendor's `LanguageModel`(s) from the developer-entered key.
+    /// Stored erased because the closure's type mentions an iOS-27-only type
+    /// and stored properties can't be availability-gated.
+    private let _vendorPackageFactory: Any?
+    @State private var vendorPackageEnabled = false
+    @State private var vendorPackageKey = ""
+
+    public init() {
+        self.vendorPackageName = nil
+        self._vendorPackageFactory = nil
+    }
+
+    /// Host apps built for OS 27 can hand in an official vendor package
+    /// (e.g. Anthropic's ClaudeForFoundationModels): the demo shows a section
+    /// for it, and the models returned by `makeVendorModels` join the chain
+    /// via `AIConfiguration.customModels`.
+    @available(iOS 27.0, macOS 27.0, *)
+    public init(
+        vendorPackageName: String,
+        makeVendorModels: @escaping @Sendable (String) -> [CustomLanguageModel]
+    ) {
+        self.vendorPackageName = vendorPackageName
+        self._vendorPackageFactory = makeVendorModels
+    }
 
     /// The developer knobs that require an explicit "Apply".
     private struct AppliedSettings: Equatable {
@@ -83,6 +111,8 @@ public struct DemoRootView: View {
         var apiKey = ""
         var model = ""
         var offeredVendors: Set<CloudVendor> = []
+        var vendorPackageEnabled = false
+        var vendorPackageKey = ""
         var notifyDowngrades = true
     }
 
@@ -93,6 +123,8 @@ public struct DemoRootView: View {
             apiKey: apiKey,
             model: model,
             offeredVendors: offeredVendors,
+            vendorPackageEnabled: vendorPackageEnabled,
+            vendorPackageKey: vendorPackageKey,
             notifyDowngrades: notifyDowngrades
         )
     }
@@ -193,6 +225,18 @@ public struct DemoRootView: View {
                 Text("Developer's choice: which vendors to expose. Each offered vendor appears in the picker; the USER connects their own account by tapping the row and entering their key (vendors don't permit subscription sign-in for third-party apps — the official vendor packages plug in via customModels instead). To route a call to it, turn the other providers off.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if let vendorPackageName {
+                Section("Official vendor package (customModels)") {
+                    Toggle("Enable \(vendorPackageName)", isOn: $vendorPackageEnabled)
+                    if vendorPackageEnabled {
+                        SecureField("Vendor API key (developer's — dev billing)", text: $vendorPackageKey)
+                            .textContentType(.password)
+                    }
+                    Text("The vendor's own Swift package, conforming to Apple's LanguageModel protocol, joins the chain via AIConfiguration.customModels. Developer-provisioned: usage bills the app's vendor account (App Attest or a proxy in production; a key here for development).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section("Privacy") {
                 Toggle("Notify privacy downgrades", isOn: $notifyDowngrades)
@@ -416,6 +460,15 @@ public struct DemoRootView: View {
                 let token = connectedTokens[vendor] ?? ""
                 return UserAccount(vendor: vendor, isConnected: true, token: { token })
             }
+        // Official vendor package (host-app-supplied): the developer enabled it
+        // and provided a key → the app's factory builds the vendor's
+        // LanguageModel(s), which join the chain via customModels.
+        if #available(iOS 27.0, macOS 27.0, *),
+           applied.vendorPackageEnabled,
+           !applied.vendorPackageKey.isEmpty,
+           let factory = _vendorPackageFactory as? (@Sendable (String) -> [CustomLanguageModel]) {
+            config.customModels = factory(applied.vendorPackageKey)
+        }
         config.preference = effectivePreference
         if applied.notifyDowngrades {
             config.privacyDisclosure = .notify { downgrade in

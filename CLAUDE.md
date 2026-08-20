@@ -164,13 +164,31 @@ Next steps, in order:
    therefore **key-only** (sign-in removed; `VoltaSDKAuth` retained as
    general-purpose machinery, demo no longer depends on it).
    **The official vendor route is the vendor's own package** (Gemini via
-   Google's Firebase SDK; Anthropic's Claude package) — supported via the new
+   Google's Firebase SDK; Anthropic's `ClaudeForFoundationModels`, verified
+   available: github.com/anthropics/ClaudeForFoundationModels, v0.1.0+,
+   developer-billed via `.apiKey`/`.appAttest`/`.proxied` — user-subscription
+   Claude is Agent-SDK-only, a different surface) — supported via the new
    public **`AIConfiguration.customModels`** plug-in point
    (`CustomLanguageModel` wraps any Apple `LanguageModel` into the chain; the
    internal `LanguageModelProvider` is existential-based; type-erased config
-   storage keeps the iOS-27 type behind a gated accessor). **Still to do:**
-   final live answer via the key-path connect flow, real streaming, reasoning
-   level, resolve the chain transcript round-trip. Article draft:
+   storage keeps the iOS-27 type behind a gated accessor).
+   **FRONT DOOR VALIDATED LIVE (August 2026, beta 27A5237l):** a
+   user-connected Gemini account (API key via the connect sheet) answered in
+   `macOSDemo` through the full path — chain → `LanguageModelProvider` →
+   `LanguageModelSession` → the `CloudAccountLanguageModel` executor →
+   transcript decompose → REST; the whole package also builds clean on the new
+   beta (no SDK drift). Demo hook for vendor packages shipped:
+   `DemoRootView.init(vendorPackageName:makeVendorModels:)` + an "Official
+   vendor package" section; `macOSDemo` (deployment now macOS 27; iOSDemo
+   still 26) wires `ClaudeForFoundationModels` behind `#if canImport`, **SPM
+   dependency parked** (commented in project.yml, removed from pbxproj): beta
+   version skew broke it in both directions (0.1.4 targets beta 3 — failed vs
+   the June beta on `SamplingMode`, vs 27A5237l on `Transcript.CustomSegment`).
+   Re-attach when Anthropic ships a matching release; the section lights up by
+   itself. **Toolchain: beta 27A5237l at `~/Downloads/Xcode-beta.app`.**
+   **Still to do (Part 2 leftovers, deferred by design):** Claude-package live
+   validation once re-attached, real streaming, reasoning level, resolve the
+   chain transcript round-trip. Article draft:
    `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.

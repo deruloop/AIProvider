@@ -58,7 +58,11 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   and a friendly picker label. The credential is a **per-call token provider**
   (static key, Keychain, or OAuth token) living on the model, off the hashable
   executor config (session 339). *Foundation: the OAuth flow itself isn't wired;
-  no streaming/reasoning-level; unverified against live keys on a device.*
+  no streaming/reasoning-level.* **Validated live (August 2026, beta
+  27A5237l): a user-connected Gemini account (API key) answered in the demo
+  through the full path — chain → `LanguageModelProvider` →
+  `LanguageModelSession` → the `CloudAccountLanguageModel` executor →
+  transcript decomposition → REST → response reassembled in the chat.*
 - **Managed OAuth for user accounts — new `VoltaSDKAuth` module.** Automates the
   whole runtime sign-in so the developer's side is "register your app once →
   paste a client ID → enable": `OAuthAccount` runs `ASWebAuthenticationSession`
@@ -93,6 +97,17 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   `VoltaSDKAuth` remains in the package as validated, general-purpose OAuth
   machinery (for providers/deployments where per-app clients are permitted);
   the demo no longer depends on it.
+- **Demo hook for vendor packages — and a beta-skew lesson.** `DemoRootView`
+  gained a gated `init(vendorPackageName:makeVendorModels:)` plus an "Official
+  vendor package" section (enable + developer API key → `customModels`), so a
+  host app supplies the vendor model and the shared UI does the rest.
+  `macOSDemo` (deployment now macOS 27; iOSDemo unchanged at 26) wires
+  Anthropic's `ClaudeForFoundationModels` behind `#if canImport` — **with the
+  SPM dependency currently parked**: the package tracks the latest Xcode 27
+  beta SDK and version skew broke the build in *both* directions (0.1.4
+  targets beta 3; it failed against the June beta on `SamplingMode` shapes and
+  against beta 27A5237l on `Transcript.CustomSegment`). Re-attach when
+  Anthropic ships a matching release — the demo section lights up by itself.
 - **Vendor packages plug in: `AIConfiguration.customModels` (iOS 27).** The
   official vendor route Apple announced — Google ships Gemini for the
   Foundation Models framework via its Firebase SDK, Anthropic publishes a

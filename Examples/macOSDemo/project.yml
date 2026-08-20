@@ -11,14 +11,31 @@
 # This is the signed counterpart to the iOS demo: same shared chat UI
 # (VoltaSDKDemoUI), so it shows the full provider chain — including Private
 # Cloud Compute on macOS 27. PCC is OPT-IN (see the entitlement note below).
+#
+# This demo also wires an OFFICIAL VENDOR PACKAGE into the chain
+# (Anthropic's ClaudeForFoundationModels via AIConfiguration.customModels) —
+# which is why it deploys to macOS 27 (the vendor package requires OS 27;
+# the shared VoltaSDK package itself still deploys from 26, and iOSDemo is
+# unchanged).
 name: macOSDemo
 options:
   bundleIdPrefix: com.voltasdk.demo
   deploymentTarget:
-    macOS: "26.0"      # runs on 26+; PCC (macOS 27+) is runtime-gated
+    macOS: "27.0"      # ClaudeForFoundationModels requires macOS 27
 packages:
   VoltaSDK:
     path: ../..
+  # ── ClaudeForFoundationModels: PARKED (beta version skew) ────────────────
+  # Anthropic's package tracks the LATEST Xcode 27 beta SDK, and version skew
+  # breaks the build in both directions (observed live: 0.1.4 targets beta 3 —
+  # it failed against beta 2's SDK on SamplingMode shapes AND against beta 5's
+  # on Transcript.CustomSegment). Re-attach when Anthropic ships a release
+  # matching your installed beta: uncomment here + the dependency below (or
+  # just File > Add Package Dependencies… in Xcode). The app code is guarded
+  # with `#if canImport(ClaudeForFoundationModels)` and lights up by itself.
+  # ClaudeForFoundationModels:
+  #   url: https://github.com/anthropics/ClaudeForFoundationModels.git
+  #   from: 0.1.0
 targets:
   macOSDemo:
     type: application
@@ -28,6 +45,8 @@ targets:
     dependencies:
       - package: VoltaSDK
         product: VoltaSDKDemoUI
+      # - package: ClaudeForFoundationModels
+      #   product: ClaudeForFoundationModels
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
