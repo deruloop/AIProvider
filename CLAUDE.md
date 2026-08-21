@@ -188,8 +188,11 @@ Next steps, in order:
    itself. **Toolchain: beta 27A5237l at `~/Downloads/Xcode-beta.app`.**
    **Still to do (Part 2 leftovers, deferred by design):** Claude-package live
    validation once re-attached, real streaming, reasoning level, resolve the
-   chain transcript round-trip. Article draft:
-   `docs/articles/bringing-cloud-models-front-door.md` (git-excluded). The
+   chain transcript round-trip. **Article (Part 2) FINALIZED (Aug 2026):**
+   `docs/articles/bringing-cloud-models-front-door.md` (git-excluded) —
+   published as a deliberate beta-season snapshot (framed as such in its
+   header); to be updated as GA approaches (Claude-package live beat + GA
+   re-verify of every §8-derived claim). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.
 2. **`preferred(_ need:) -> any LanguageModel`** bridge (D1/D9): evolve
