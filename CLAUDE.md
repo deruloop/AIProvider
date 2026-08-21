@@ -251,6 +251,13 @@ overflow, never inferred from the need.
    session streaming for on-device/PCC/wrapped models, executor forwards
    deltas, demo UI renders live. Design question settled as designed: fail
    before first fragment = fall through; fail mid-stream = surface.
+   **VALIDATED LIVE: PCC streams** (Aug 2026, entitled macOSDemo on the M2
+   host — native session streaming end-to-end through the chain). Still to
+   observe live: the SSE path (any vendor key) and the front-door round-trip
+   (connect-sheet account). Note: the PCC entitlement wiring
+   (CODE_SIGN_ENTITLEMENTS in the demo pbxproj) is a deliberately
+   UNCOMMITTED local change — the committed project stays entitlement-free
+   (opt-in policy); re-apply after any checkout/regenerate of the project.
 4. ~~Token/context awareness~~ ✅ (D13)
 5. ~~Multi-turn~~ ✅ (D12) — still open, lower priority: KV-cache/`Transcript`
    reuse when the provider didn't change between turns; trimming hook pairs

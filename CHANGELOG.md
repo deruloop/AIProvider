@@ -27,6 +27,8 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   single-fragment gap from session 339), and `AIPlaygroundView` renders
   fragments as they arrive. New public type `AIStreamEvent`; `MockProvider`
   gains `streamFragments`/`streamFailure` for testing streamed chains.
+  **Validated live on PCC** (entitled `macOSDemo`, macOS 27 on an M2 host):
+  Apple's cloud model streams progressively through the chain.
 - **Private Cloud Compute provider (D6).** New `PrivateCloudComputeProvider`
   wraps `PrivateCloudComputeLanguageModel` behind the existing `ModelProvider`
   surface: Apple's free "powered" tier — no key, no account, a per-user daily
