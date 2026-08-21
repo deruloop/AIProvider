@@ -194,6 +194,23 @@ public struct AIResponse: Sendable {
     public let text: String
     public let provider: ProviderIdentifier
     public let privacyLevel: PrivacyLevel
+
+    public init(text: String, provider: ProviderIdentifier, privacyLevel: PrivacyLevel) {
+        self.text = text
+        self.provider = provider
+        self.privacyLevel = privacyLevel
+    }
+}
+
+/// One step of a streamed response (see `AIOrchestrator.streamDetailed`).
+public enum AIStreamEvent: Sendable, Equatable {
+    /// Emitted once, before the first text fragment: which provider is
+    /// answering and at which privacy level — the streaming counterpart of
+    /// `AIResponse`'s provenance (and session 339's "metadata first").
+    case began(provider: ProviderIdentifier, privacyLevel: PrivacyLevel)
+    /// A fragment of the answer, in arrival order. Fragments are deltas:
+    /// concatenating them yields the full answer.
+    case text(String)
 }
 
 // MARK: - Orchestrator
@@ -358,6 +375,170 @@ public actor AIOrchestrator {
         }
 
         throw lastError
+    }
+
+    // MARK: Streaming (D16)
+
+    /// Streams a response through the same resolution-and-fallback chain as
+    /// `respond`. Fragments arrive as the provider produces them; a provider
+    /// without a native streaming path delivers its whole answer as one
+    /// fragment, so the caller writes a single loop either way.
+    ///
+    /// FALLBACK RULE (D16): automatic fallback applies only UNTIL the first
+    /// fragment reaches the caller. Once any text has been shown, a failure
+    /// surfaces as an error instead of silently re-answering with a different
+    /// model — visible text must never be retracted by the chain.
+    public func streamResponse(
+        to prompt: String,
+        instructions: String? = nil,
+        history: [ChatTurn] = []
+    ) -> AsyncThrowingStream<String, Error> {
+        let events = streamDetailed(to: prompt, instructions: instructions, history: history)
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await event in events {
+                        if case .text(let fragment) = event {
+                            continuation.yield(fragment)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Like `streamResponse`, but with provenance: a `.began` event names the
+    /// provider (and privacy level) right before its first fragment — the
+    /// streaming counterpart of `respondDetailed`.
+    public func streamDetailed(
+        to prompt: String,
+        instructions: String? = nil,
+        history: [ChatTurn] = []
+    ) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        // Snapshot the immutable actor state so the stream task never has to
+        // hop back onto the actor.
+        let providers = orderedProviders
+        let disclosure = privacyDisclosure
+        let reserve = responseTokenReserve
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                await Self.runStream(
+                    prompt: prompt,
+                    instructions: instructions,
+                    history: history,
+                    providers: providers,
+                    disclosure: disclosure,
+                    reserve: reserve,
+                    continuation: continuation
+                )
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The streaming counterpart of the `respondDetailed` loop: same
+    /// availability skip, token pre-flight (D13), and privacy gate (D7/D10),
+    /// with the D16 first-fragment fallback rule at the end.
+    private static func runStream(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        providers: [any ModelProvider],
+        disclosure: PrivacyDisclosure,
+        reserve: Int,
+        continuation: AsyncThrowingStream<AIStreamEvent, Error>.Continuation
+    ) async {
+        guard let first = providers.first else {
+            continuation.finish(throwing: ProviderError.noProviderAvailable)
+            return
+        }
+        let baseline = first.privacyLevel
+        var lastError: ProviderError = .noProviderAvailable
+
+        for provider in providers {
+            if Task.isCancelled {
+                continuation.finish(throwing: ProviderError.cancelled)
+                return
+            }
+            if case .unavailable = await provider.availability() {
+                continue
+            }
+
+            if let window = provider.contextSize,
+               let needed = await provider.tokenCount(
+                   prompt: prompt, instructions: instructions, history: history
+               ),
+               needed + reserve >= window {
+                lastError = .contextWindowExceeded
+                continue
+            }
+
+            if provider.privacyLevel < baseline {
+                let downgrade = PrivacyDowngrade(
+                    from: baseline,
+                    to: provider.privacyLevel,
+                    provider: provider.identifier
+                )
+                switch disclosure {
+                case .silent:
+                    break
+                case .notify(let handler):
+                    handler(downgrade)
+                case .askOnPrivacyChange(let handler):
+                    guard await handler(downgrade) else {
+                        lastError = .privacyRestricted
+                        continue
+                    }
+                case .denyDowngrade:
+                    lastError = .privacyRestricted
+                    continue
+                }
+            }
+
+            // D16 rule: fallback is legal only until the first fragment is
+            // out; after that, errors surface.
+            var emitted = false
+            do {
+                for try await fragment in provider.streamResponse(
+                    to: prompt, instructions: instructions, history: history
+                ) {
+                    if !emitted {
+                        emitted = true
+                        continuation.yield(.began(
+                            provider: provider.identifier,
+                            privacyLevel: provider.privacyLevel
+                        ))
+                    }
+                    continuation.yield(.text(fragment))
+                }
+                guard emitted else {
+                    // A stream that ends without fragments is an empty
+                    // response — terminal, like the buffered path.
+                    continuation.finish(throwing: ProviderError.emptyResponse)
+                    return
+                }
+                continuation.finish()
+                return
+            } catch {
+                let providerError = (error as? ProviderError)
+                    ?? (error is CancellationError
+                        ? .cancelled
+                        : .generation(String(describing: error)))
+                lastError = providerError
+                if !emitted, providerError.isRecoverableByFallback {
+                    continue        // try the next provider
+                }
+                continuation.finish(throwing: providerError)
+                return
+            }
+        }
+
+        continuation.finish(throwing: lastError)
     }
 
     // MARK: Resolution (the primitive, not the convenience)

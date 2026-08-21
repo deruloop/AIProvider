@@ -82,26 +82,7 @@ public struct GeminiProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
-        // App-supplied history (D12) → user/model turns → current prompt.
-        var contents: [GenerateRequest.Content] = []
-        for turn in history {
-            contents.append(.init(
-                role: turn.role == .user ? "user" : "model",
-                parts: [.init(text: turn.text)]
-            ))
-        }
-        contents.append(.init(role: "user", parts: [.init(text: prompt)]))
-
-        let body = GenerateRequest(
-            systemInstruction: (instructions?.isEmpty == false)
-                ? .init(role: nil, parts: [.init(text: instructions!)])
-                : nil,
-            contents: contents,
-            generationConfig: .init(
-                temperature: temperature,
-                maxOutputTokens: maxTokens
-            )
-        )
+        let body = makeBody(prompt: prompt, instructions: instructions, history: history)
 
         // Credential detection, D15-style: a Google API key always starts with
         // "AIza" and speaks the Developer API (generativelanguage). Anything
@@ -116,6 +97,140 @@ public struct GeminiProvider: ModelProvider {
             return try await developerAPIRespond(body)
         }
         return try await codeAssistRespond(body)
+    }
+
+    /// App-supplied history (D12) → user/model turns → current prompt.
+    private func makeBody(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> GenerateRequest {
+        var contents: [GenerateRequest.Content] = []
+        for turn in history {
+            contents.append(.init(
+                role: turn.role == .user ? "user" : "model",
+                parts: [.init(text: turn.text)]
+            ))
+        }
+        contents.append(.init(role: "user", parts: [.init(text: prompt)]))
+
+        return GenerateRequest(
+            systemInstruction: (instructions?.isEmpty == false)
+                ? .init(role: nil, parts: [.init(text: instructions!)])
+                : nil,
+            contents: contents,
+            generationConfig: .init(
+                temperature: temperature,
+                maxOutputTokens: maxTokens
+            )
+        )
+    }
+
+    // MARK: Streaming (D16)
+
+    /// Real token streaming on the Developer API transport
+    /// (`streamGenerateContent?alt=sse`): each SSE event is a chunk whose
+    /// candidate parts are text deltas. The Code Assist (OAuth) transport has
+    /// no SSE equivalent in its envelope, so it stays buffered — the whole
+    /// answer as one fragment, like the protocol default.
+    public func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    if apiKey.hasPrefix("AIza") {
+                        try await performStream(
+                            prompt: prompt, instructions: instructions, history: history
+                        ) { continuation.yield($0) }
+                    } else {
+                        let text = try await respond(
+                            to: prompt, instructions: instructions, history: history
+                        )
+                        continuation.yield(text)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func performStream(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        onFragment: @Sendable (String) -> Void
+    ) async throws {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent("models/\(model):streamGenerateContent"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw ProviderError.encoding("Bad streaming endpoint URL")
+        }
+        components.queryItems = [URLQueryItem(name: "alt", value: "sse")]
+        guard let url = components.url else {
+            throw ProviderError.encoding("Bad streaming endpoint URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        do {
+            request.httpBody = try JSONEncoder().encode(
+                makeBody(prompt: prompt, instructions: instructions, history: history)
+            )
+        } catch {
+            throw ProviderError.encoding("Request encoding failed: \(error.localizedDescription)")
+        }
+
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await urlSession.bytes(for: request)
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        } catch {
+            throw ProviderError.network(code: -1)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ProviderError.network(code: -1)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            var data = Data()
+            do { for try await byte in bytes { data.append(byte) } } catch {}
+            throw Self.mapHTTPFailure(http, data: data)
+        }
+
+        var parser = SSEParser()
+        do {
+            for try await line in bytes.lines {
+                guard let event = parser.consume(line) else { continue }
+                let payload = Data(event.data.utf8)
+                // A mid-stream failure arrives as a regular error envelope.
+                if let envelope = try? JSONDecoder().decode(GeminiErrorEnvelope.self, from: payload) {
+                    throw ProviderError.api(
+                        message: envelope.error.message, code: envelope.error.status
+                    )
+                }
+                if let chunk = try? JSONDecoder().decode(GeminiStreamChunk.self, from: payload) {
+                    let delta = (chunk.candidates?.first?.content?.parts ?? [])
+                        .compactMap(\.text)
+                        .joined()
+                    if !delta.isEmpty { onFragment(delta) }
+                }
+            }
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        }
     }
 
     // MARK: Developer API transport (API key)
@@ -224,35 +339,41 @@ public struct GeminiProvider: ModelProvider {
         guard let http = response as? HTTPURLResponse else {
             throw ProviderError.network(code: -1)
         }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.mapHTTPFailure(http, data: data)
+        }
+        guard !data.isEmpty else { throw ProviderError.emptyResponse }
+        return data
+    }
 
+    /// HTTP errors mapped onto semantic cases (non-2xx only) — identical
+    /// semantics for both transports and shared with the streaming path.
+    private static func mapHTTPFailure(_ http: HTTPURLResponse, data: Data) -> ProviderError {
         switch http.statusCode {
-        case 200...299:
-            guard !data.isEmpty else { throw ProviderError.emptyResponse }
-            return data
         case 401, 403:
             // Surface Google's explanation when it has one — e.g. a 403
             // "…API has not been used in project …" is far more actionable
             // than a generic auth failure.
             if let envelope = try? JSONDecoder().decode(GeminiErrorEnvelope.self, from: data),
                !envelope.error.message.isEmpty {
-                throw ProviderError.api(message: envelope.error.message, code: envelope.error.status)
+                return .api(message: envelope.error.message, code: envelope.error.status)
             }
-            throw ProviderError.unauthorized
+            return .unauthorized
         case 429:
             let retryAfter = RetryAfterParser.parse(http.value(forHTTPHeaderField: "retry-after"))
-            throw ProviderError.rateLimited(retryAfter: retryAfter)
+            return .rateLimited(retryAfter: retryAfter)
         case 500...599:
-            throw ProviderError.network(code: http.statusCode)
+            return .network(code: http.statusCode)
         default:
             if let envelope = try? JSONDecoder().decode(GeminiErrorEnvelope.self, from: data) {
                 // An invalid key is a 400 INVALID_ARGUMENT here, not a 401.
                 if envelope.error.message.localizedCaseInsensitiveContains("api key not valid") {
-                    throw ProviderError.unauthorized
+                    return .unauthorized
                 }
-                throw ProviderError.api(message: envelope.error.message, code: envelope.error.status)
+                return .api(message: envelope.error.message, code: envelope.error.status)
             }
             let raw = String(data: data, encoding: .utf8) ?? "<unreadable body>"
-            throw ProviderError.api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
+            return .api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
         }
     }
 
@@ -307,6 +428,15 @@ private struct GenerateResponse: Decodable {
     struct Part: Decodable {
         let text: String?
     }
+}
+
+/// One SSE chunk of a streamed generation — a tolerant subset of
+/// `GenerateContentResponse` (final chunks may carry no content at all).
+private struct GeminiStreamChunk: Decodable {
+    let candidates: [Candidate]?
+    struct Candidate: Decodable { let content: Content? }
+    struct Content: Decodable { let parts: [Part]? }
+    struct Part: Decodable { let text: String? }
 }
 
 private struct GeminiErrorEnvelope: Decodable {

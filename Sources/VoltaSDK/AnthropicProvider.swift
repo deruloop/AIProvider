@@ -89,6 +89,135 @@ public struct AnthropicProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
+        let request = try makeRequest(
+            prompt: prompt, instructions: instructions, history: history, stream: false
+        )
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: request)
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        } catch {
+            throw ProviderError.network(code: -1)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ProviderError.network(code: -1)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.mapHTTPFailure(http, data: data)
+        }
+        guard !data.isEmpty else { throw ProviderError.emptyResponse }
+
+        do {
+            let decoded = try JSONDecoder().decode(MessagesResponse.self, from: data)
+            guard let text = decoded.content.first(where: { $0.type == "text" })?.text,
+                  !text.isEmpty else {
+                throw ProviderError.emptyResponse
+            }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch let providerError as ProviderError {
+            throw providerError
+        } catch {
+            throw ProviderError.decoding(error.localizedDescription)
+        }
+    }
+
+    // MARK: Streaming (D16)
+
+    /// Real token streaming over SSE (`"stream": true`): fragments are the
+    /// `content_block_delta` events' `text_delta` payloads; `message_stop`
+    /// ends the stream; an `error` event surfaces mid-stream failures.
+    public func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await performStream(
+                        prompt: prompt, instructions: instructions, history: history
+                    ) { continuation.yield($0) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func performStream(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        onFragment: @Sendable (String) -> Void
+    ) async throws {
+        let request = try makeRequest(
+            prompt: prompt, instructions: instructions, history: history, stream: true
+        )
+
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await urlSession.bytes(for: request)
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        } catch {
+            throw ProviderError.network(code: -1)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ProviderError.network(code: -1)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            var data = Data()
+            do { for try await byte in bytes { data.append(byte) } } catch {}
+            throw Self.mapHTTPFailure(http, data: data)
+        }
+
+        var parser = SSEParser()
+        do {
+            for try await line in bytes.lines {
+                guard let event = parser.consume(line) else { continue }
+                guard let piece = try? JSONDecoder().decode(
+                    StreamEvent.self, from: Data(event.data.utf8)
+                ) else { continue }
+
+                switch piece.type {
+                case "content_block_delta":
+                    if piece.delta?.type == "text_delta",
+                       let text = piece.delta?.text,
+                       !text.isEmpty {
+                        onFragment(text)
+                    }
+                case "message_stop":
+                    return
+                case "error":
+                    throw Self.mapStreamError(piece.error)
+                default:
+                    break   // message_start, content_block_start/stop, message_delta, ping
+                }
+            }
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        }
+    }
+
+    // MARK: Request building and error mapping (shared by both paths)
+
+    private func makeRequest(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        stream: Bool
+    ) throws -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -111,65 +240,52 @@ public struct AnthropicProvider: ModelProvider {
                     model: model,
                     maxTokens: maxTokens,
                     system: (instructions?.isEmpty == false) ? instructions : nil,
-                    messages: messages
+                    messages: messages,
+                    stream: stream
                 )
             )
         } catch {
             throw ProviderError.encoding("Request encoding failed: \(error.localizedDescription)")
         }
+        return request
+    }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await urlSession.data(for: request)
-        } catch let urlError as URLError {
-            if urlError.code == .cancelled { throw ProviderError.cancelled }
-            throw ProviderError.network(code: urlError.errorCode)
-        } catch {
-            throw ProviderError.network(code: -1)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw ProviderError.network(code: -1)
-        }
-
+    /// HTTP errors mapped onto semantic cases (non-2xx only).
+    private static func mapHTTPFailure(_ http: HTTPURLResponse, data: Data) -> ProviderError {
         switch http.statusCode {
-        case 200...299:
-            break
         case 401, 403:
-            throw ProviderError.unauthorized
+            return .unauthorized
         case 429:
             let retryAfter = RetryAfterParser.parse(http.value(forHTTPHeaderField: "retry-after"))
-            throw ProviderError.rateLimited(retryAfter: retryAfter)
+            return .rateLimited(retryAfter: retryAfter)
         case 500...599:
             // Includes 529 "overloaded" — transient, recoverable by fallback.
-            throw ProviderError.network(code: http.statusCode)
+            return .network(code: http.statusCode)
         default:
             if let envelope = try? JSONDecoder().decode(AnthropicErrorEnvelope.self, from: data) {
                 // Context overflow arrives as a 400 invalid_request_error;
                 // single it out because the orchestrator can recover from it.
                 if envelope.error.message.localizedCaseInsensitiveContains("prompt is too long") {
-                    throw ProviderError.contextWindowExceeded
+                    return .contextWindowExceeded
                 }
-                throw ProviderError.api(message: envelope.error.message, code: envelope.error.type)
+                return .api(message: envelope.error.message, code: envelope.error.type)
             }
             let raw = String(data: data, encoding: .utf8) ?? "<unreadable body>"
-            throw ProviderError.api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
+            return .api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
         }
+    }
 
-        guard !data.isEmpty else { throw ProviderError.emptyResponse }
-
-        do {
-            let decoded = try JSONDecoder().decode(MessagesResponse.self, from: data)
-            guard let text = decoded.content.first(where: { $0.type == "text" })?.text,
-                  !text.isEmpty else {
-                throw ProviderError.emptyResponse
-            }
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch let providerError as ProviderError {
-            throw providerError
-        } catch {
-            throw ProviderError.decoding(error.localizedDescription)
+    /// Mid-stream `error` events, mapped with the same semantics as the
+    /// HTTP layer (overloaded → transient network, rate limit → recoverable).
+    private static func mapStreamError(_ error: StreamEvent.ErrorPayload?) -> ProviderError {
+        guard let error else { return .api(message: "Unknown stream error", code: nil) }
+        switch error.type {
+        case "overloaded_error":
+            return .network(code: 529)
+        case "rate_limit_error":
+            return .rateLimited(retryAfter: nil)
+        default:
+            return .api(message: error.message, code: error.type)
         }
     }
 }
@@ -181,15 +297,33 @@ private struct MessagesRequest: Encodable {
     let maxTokens: Int
     let system: String?
     let messages: [Message]
+    let stream: Bool
 
     enum CodingKeys: String, CodingKey {
-        case model, system, messages
+        case model, system, messages, stream
         case maxTokens = "max_tokens"
     }
 
     struct Message: Encodable {
         let role: String
         let content: String
+    }
+}
+
+/// One SSE event of a streamed message. Only the fields the streaming path
+/// reads; other event types decode with `nil`s and are skipped.
+private struct StreamEvent: Decodable {
+    let type: String
+    let delta: Delta?
+    let error: ErrorPayload?
+
+    struct Delta: Decodable {
+        let type: String?
+        let text: String?
+    }
+    struct ErrorPayload: Decodable {
+        let type: String
+        let message: String
     }
 }
 

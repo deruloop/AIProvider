@@ -11,6 +11,22 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
+- **Streaming (D16).** New `streamResponse` / `streamDetailed` on
+  `AIOrchestrator`: the answer as ordered text deltas through the same
+  resolution-and-fallback chain as `respond`, with a `.began` provenance event
+  before the first fragment. Fallback rule: automatic fallback applies only
+  until the first fragment reaches the caller — visible text is never
+  retracted; after it, failures surface. `ModelProvider` gains an optional
+  `streamResponse` capability (default: the buffered answer as one fragment,
+  so existing custom providers keep working); all five built-ins stream
+  natively — OpenAI/Anthropic/Gemini over SSE (Gemini on the Developer API
+  transport; the Code Assist OAuth envelope stays buffered), on-device/PCC/
+  wrapped `LanguageModel`s via the session's native stream (cumulative
+  snapshots → deltas). On iOS 27 the `CloudAccountLanguageModel` executor now
+  forwards real deltas into the generation channel (closing the
+  single-fragment gap from session 339), and `AIPlaygroundView` renders
+  fragments as they arrive. New public type `AIStreamEvent`; `MockProvider`
+  gains `streamFragments`/`streamFailure` for testing streamed chains.
 - **Private Cloud Compute provider (D6).** New `PrivateCloudComputeProvider`
   wraps `PrivateCloudComputeLanguageModel` behind the existing `ModelProvider`
   surface: Apple's free "powered" tier — no key, no account, a per-user daily

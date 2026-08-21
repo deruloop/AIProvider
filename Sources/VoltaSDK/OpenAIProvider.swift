@@ -95,6 +95,130 @@ public struct OpenAIProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
+        let request = try makeRequest(
+            prompt: prompt, instructions: instructions, history: history, stream: false
+        )
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: request)
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        } catch {
+            throw ProviderError.network(code: -1)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ProviderError.network(code: -1)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.mapHTTPFailure(http, data: data)
+        }
+        guard !data.isEmpty else { throw ProviderError.emptyResponse }
+
+        do {
+            let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
+            guard let content = decoded.choices.first?.message.content else {
+                throw ProviderError.emptyResponse
+            }
+            return content.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch let providerError as ProviderError {
+            throw providerError
+        } catch {
+            throw ProviderError.decoding(error.localizedDescription)
+        }
+    }
+
+    // MARK: Streaming (D16)
+
+    /// Real token streaming over SSE (`"stream": true`): fragments are the
+    /// chunks' `delta.content`; `data: [DONE]` ends the stream.
+    public func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await performStream(
+                        prompt: prompt, instructions: instructions, history: history
+                    ) { continuation.yield($0) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func performStream(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        onFragment: @Sendable (String) -> Void
+    ) async throws {
+        let request = try makeRequest(
+            prompt: prompt, instructions: instructions, history: history, stream: true
+        )
+
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await urlSession.bytes(for: request)
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        } catch {
+            throw ProviderError.network(code: -1)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ProviderError.network(code: -1)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            // Non-2xx: the body is a regular JSON error — collect it
+            // (best-effort) and map it exactly like the buffered path.
+            var data = Data()
+            do { for try await byte in bytes { data.append(byte) } } catch {}
+            throw Self.mapHTTPFailure(http, data: data)
+        }
+
+        var parser = SSEParser()
+        do {
+            for try await line in bytes.lines {
+                guard let event = parser.consume(line) else { continue }
+                if event.data == "[DONE]" { return }
+                let payload = Data(event.data.utf8)
+                // A mid-stream failure arrives as a regular error envelope.
+                if let envelope = try? JSONDecoder().decode(OpenAIErrorEnvelope.self, from: payload) {
+                    throw ProviderError.api(
+                        message: envelope.error.message, code: envelope.error.code
+                    )
+                }
+                if let chunk = try? JSONDecoder().decode(StreamChunk.self, from: payload),
+                   let delta = chunk.choices.first?.delta.content,
+                   !delta.isEmpty {
+                    onFragment(delta)
+                }
+            }
+        } catch let urlError as URLError {
+            if urlError.code == .cancelled { throw ProviderError.cancelled }
+            throw ProviderError.network(code: urlError.errorCode)
+        }
+    }
+
+    // MARK: Request building and error mapping (shared by both paths)
+
+    private func makeRequest(
+        prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        stream: Bool
+    ) throws -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -119,62 +243,35 @@ public struct OpenAIProvider: ModelProvider {
                     model: model,
                     messages: messages,
                     maxCompletionTokens: maxTokens,
-                    temperature: temperature
+                    temperature: temperature,
+                    stream: stream
                 )
             )
         } catch {
             throw ProviderError.encoding("Request encoding failed: \(error.localizedDescription)")
         }
+        return request
+    }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await urlSession.data(for: request)
-        } catch let urlError as URLError {
-            if urlError.code == .cancelled { throw ProviderError.cancelled }
-            throw ProviderError.network(code: urlError.errorCode)
-        } catch {
-            throw ProviderError.network(code: -1)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw ProviderError.network(code: -1)
-        }
-
-        // HTTP errors mapped onto semantic cases.
+    /// HTTP errors mapped onto semantic cases (non-2xx only).
+    private static func mapHTTPFailure(_ http: HTTPURLResponse, data: Data) -> ProviderError {
         switch http.statusCode {
-        case 200...299:
-            break
         case 401, 403:
-            throw ProviderError.unauthorized
+            return .unauthorized
         case 429:
-            let retryAfter = Self.parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After"))
-            throw ProviderError.rateLimited(retryAfter: retryAfter)
+            let retryAfter = parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After"))
+            return .rateLimited(retryAfter: retryAfter)
         default:
             if let envelope = try? JSONDecoder().decode(OpenAIErrorEnvelope.self, from: data) {
                 // Context-window overflow arrives as an application error:
                 // we single it out because the orchestrator can recover from it.
                 if envelope.error.code == "context_length_exceeded" {
-                    throw ProviderError.contextWindowExceeded
+                    return .contextWindowExceeded
                 }
-                throw ProviderError.api(message: envelope.error.message, code: envelope.error.code)
+                return .api(message: envelope.error.message, code: envelope.error.code)
             }
             let raw = String(data: data, encoding: .utf8) ?? "<unreadable body>"
-            throw ProviderError.api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
-        }
-
-        guard !data.isEmpty else { throw ProviderError.emptyResponse }
-
-        do {
-            let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
-            guard let content = decoded.choices.first?.message.content else {
-                throw ProviderError.emptyResponse
-            }
-            return content.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch let providerError as ProviderError {
-            throw providerError
-        } catch {
-            throw ProviderError.decoding(error.localizedDescription)
+            return .api(message: "HTTP \(http.statusCode): \(raw)", code: nil)
         }
     }
 
@@ -191,9 +288,10 @@ private struct ChatRequest: Encodable {
     let messages: [Message]
     let maxCompletionTokens: Int
     let temperature: Double
+    let stream: Bool
 
     enum CodingKeys: String, CodingKey {
-        case model, messages, temperature
+        case model, messages, temperature, stream
         // `max_tokens` is deprecated: newer models only accept this one.
         case maxCompletionTokens = "max_completion_tokens"
     }
@@ -201,6 +299,15 @@ private struct ChatRequest: Encodable {
     struct Message: Encodable {
         let role: String
         let content: String
+    }
+}
+
+/// One SSE chunk of a streamed completion.
+private struct StreamChunk: Decodable {
+    let choices: [Choice]
+    struct Choice: Decodable {
+        let delta: Delta
+        struct Delta: Decodable { let content: String? }
     }
 }
 

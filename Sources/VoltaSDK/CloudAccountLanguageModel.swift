@@ -22,8 +22,9 @@
 //  without a global registry. A static-key convenience initializer covers the
 //  simple case.
 //
-//  Non-streaming for now — one text fragment — because `ModelProvider.respond`
-//  is non-streaming; true token streaming lands when the providers gain it.
+//  STREAMING (D16): the executor forwards the REST provider's stream into the
+//  generation channel fragment by fragment — real token deltas on the vendors'
+//  SSE paths, exactly the streaming-first shape session 339 prescribes.
 //
 
 import Foundation
@@ -101,21 +102,23 @@ public struct CloudAccountLanguageModel: LanguageModel {
                 throw ProviderError.unauthorized
             }
 
-            let text: String
+            // Forward the provider's stream into the channel (D16): real token
+            // deltas where the REST client streams (SSE), one fragment where it
+            // buffers. The rough per-fragment token estimate keeps the
+            // channel's usage reporting populated.
             do {
-                text = try await provider.respond(
+                for try await fragment in provider.streamResponse(
                     to: parts.prompt,
                     instructions: parts.instructions,
                     history: parts.history
-                )
+                ) {
+                    await channel.send(.response(
+                        action: .appendText(fragment, tokenCount: max(1, fragment.count / 4))
+                    ))
+                }
             } catch let error as ProviderError {
                 throw Self.mapToFrameworkError(error)
             }
-            // One fragment (non-streaming). The rough token estimate keeps the
-            // channel's usage reporting populated.
-            await channel.send(.response(
-                action: .appendText(text, tokenCount: max(1, text.count / 4))
-            ))
         }
 
         /// Maps VoltaSDK's `ProviderError` onto the framework's built-in

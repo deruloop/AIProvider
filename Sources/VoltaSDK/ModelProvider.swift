@@ -160,6 +160,19 @@ public protocol ModelProvider: Sendable {
         history: [ChatTurn]
     ) async throws -> String
 
+    // MARK: Optional capability: streaming (D16)
+
+    /// Streaming response: the reply as ordered text fragments (deltas, not
+    /// cumulative snapshots). The default implementation buffers `respond`
+    /// and delivers the whole answer as ONE fragment, so every provider can
+    /// take part in a streamed chain; providers with a native streaming path
+    /// override it with real token deltas.
+    func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error>
+
     // MARK: Optional capability: token awareness (D13)
 
     /// Context window size in tokens, if known.
@@ -181,6 +194,30 @@ public extension ModelProvider {
     /// Convenience for one-shot calls (no conversation).
     func respond(to prompt: String, instructions: String?) async throws -> String {
         try await respond(to: prompt, instructions: instructions, history: [])
+    }
+
+    /// Default streaming (D16): the buffered answer as a single fragment.
+    /// Failure semantics match `respond` — an error before the fragment is
+    /// a pre-first-token failure, so the orchestrator's fallback still works.
+    func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let text = try await respond(
+                        to: prompt, instructions: instructions, history: history
+                    )
+                    continuation.yield(text)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Default: capability unsupported. Existing custom providers keep

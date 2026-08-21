@@ -253,6 +253,32 @@ sampling params); every vendor has list-models endpoints (OpenAI/Anthropic
 `GET /v1/models`, Gemini `ListModels`) — fetching them to populate a model
 picker is a roadmap item, not yet built.
 
+### D16 — Streaming as an optional capability, fallback until the first fragment
+`streamResponse` on `ModelProvider` is an optional capability in the D13
+idiom: the protocol default buffers `respond` and delivers the whole answer
+as ONE fragment, so every provider — including adopters' custom ones — can
+take part in a streamed chain without code changes; providers with a native
+path override it with real token deltas. All five built-ins override it:
+OpenAI/Anthropic/Gemini via SSE (`"stream": true`; Gemini's
+`streamGenerateContent?alt=sse` on the Developer API transport only — the
+Code Assist OAuth envelope stays buffered), on-device/PCC/`LanguageModelProvider`
+via the session's native `streamResponse` with cumulative snapshots converted
+to deltas (`SessionStreaming`). The orchestrator's `streamResponse` /
+`streamDetailed` run the same chain walk as `respond` (availability,
+pre-flight, privacy gate), with one rule: **automatic fallback applies only
+until the first fragment reaches the caller** — after any text is visible, a
+failure surfaces as an error. Rationale: silently re-answering with a
+different model would retract text the user already read; a pre-first-token
+failure is indistinguishable from the buffered case, so the chain still steps
+down silently there. Privacy disclosure keeps firing BEFORE any data is sent,
+never mid-stream. Fragments are deltas (concatenation = full answer);
+`.began(provider:privacyLevel:)` precedes the first fragment as the streamed
+counterpart of `AIResponse` provenance. Mid-stream vendor errors map like
+HTTP ones (Anthropic `overloaded_error` → transient network, `rate_limit_error`
+→ `.rateLimited`); on iOS 27 the `CloudAccountLanguageModel` executor forwards
+the same fragments into Apple's generation channel, closing the
+"single-fragment executor" gap from session 339.
+
 ## 5. Public API that must stay stable
 
 ```swift
@@ -267,6 +293,8 @@ AIOrchestrator.active                               // configured shared instanc
 // usage — history is app-owned conversation context (D12), defaults to []
 try await kit.respond(to: prompt, instructions: nil, history: []) -> String
 try await kit.respondDetailed(to:instructions:history:) -> AIResponse  // + provenance
+await kit.streamResponse(to:instructions:history:) -> AsyncThrowingStream<String, Error>       // (D16)
+await kit.streamDetailed(to:instructions:history:) -> AsyncThrowingStream<AIStreamEvent, Error> // + provenance
 try await kit.resolveProvider() -> any ModelProvider            // the primitive (D9)
 await kit.contextUsage(instructions:history:) -> ContextUsage?  // window pressure (D13)
 await kit.availableProviders() -> [ProviderIdentifier]
@@ -274,7 +302,9 @@ await kit.providerStatuses() -> [ProviderStatus]                // for UI
 
 // extension points
 protocol ModelProvider { identifier; privacyLevel; availability(); respond(to:instructions:history:);
+                         streamResponse(to:instructions:history:);               // defaulted: one fragment (D16)
                          contextSize; tokenCount(prompt:instructions:history:) }  // last two defaulted (D13)
+enum AIStreamEvent { began(provider:privacyLevel:), text(String) }               // (D16)
 enum ProviderError { ...; var isRecoverableByFallback: Bool }
 enum PrivacyLevel { external < appleCloud < onDevice }
 enum PrivacyDisclosure { silent, notify(…), askOnPrivacyChange(…), denyDowngrade }

@@ -67,7 +67,8 @@ questions doc into the design doc; release → CHANGELOG + state here.
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift build|test`;
   the machine's default `xcode-select` is still Command Line Tools). The
   package builds and tests green on the beta (Swift 6.4, macOS 27 SDK on the
-  host, **44 tests in 9 suites**). First provider shipped on the branch:
+  host, **69 tests in 16 suites** as of the D16 streaming work). First
+  provider shipped on the branch:
   **`PrivateCloudComputeProvider`** (`@available(iOS 27, *)`, wired into
   `buildProviders` at one gate per D14, default-on via
   `enablePrivateCloudCompute`, placed between on-device and the developer key
@@ -186,9 +187,11 @@ Next steps, in order:
    the June beta on `SamplingMode`, vs 27A5237l on `Transcript.CustomSegment`).
    Re-attach when Anthropic ships a matching release; the section lights up by
    itself. **Toolchain: beta 27A5237l at `~/Downloads/Xcode-beta.app`.**
-   **Still to do (Part 2 leftovers, deferred by design):** Claude-package live
-   validation once re-attached, real streaming, reasoning level, resolve the
-   chain transcript round-trip. **Article (Part 2) FINALIZED (Aug 2026):**
+   **Part 2 leftovers:** ~~real streaming~~ ✅ (D16, Aug 2026: SSE in all three
+   REST clients, native session streaming elsewhere, executor forwards deltas —
+   feeds the Part 2 article update); still to do: Claude-package live
+   validation once re-attached, reasoning level, resolve the chain transcript
+   round-trip. **Article (Part 2) FINALIZED (Aug 2026):**
    `docs/articles/bringing-cloud-models-front-door.md` (git-excluded) —
    published as a deliberate beta-season snapshot (framed as such in its
    header); to be updated as GA approaches (Claude-package live beat + GA
@@ -236,14 +239,18 @@ overflow, never inferred from the need.
 - **D13** Token awareness as optional capability + orchestrator pre-flight. *(26 impl)*
 - **D14** One package, three capability tiers — expression-level gates for 26.4, type-level gates for 27. *(27 design)*
 - **D15** Vendor-agnostic developer key: OpenAI/Claude/Gemini in one slot, auto-detected; model name travels with the key. *(26 impl)*
+- **D16** Streaming as an optional capability; fallback only until the first fragment — visible text is never retracted. *(26 impl)*
 
 ## 5. Roadmap (ordered)
 
 1. ~~Compile & green the tests~~ ✅
 2. ~~Privacy disclosure~~ ✅ (D10)
-3. **Streaming.** Add `streamResponse` to `ModelProvider` and both providers
-   (OpenAI via SSE `"stream": true`). Design question: stream vs fallback
-   (fail before first token = fall through; fail mid-stream = surface).
+3. ~~Streaming~~ ✅ (D16, Aug 2026, xcode27): `streamResponse`/`streamDetailed`
+   on the orchestrator, optional `streamResponse` capability on `ModelProvider`
+   (default = one buffered fragment), SSE in all three REST clients, native
+   session streaming for on-device/PCC/wrapped models, executor forwards
+   deltas, demo UI renders live. Design question settled as designed: fail
+   before first fragment = fall through; fail mid-stream = surface.
 4. ~~Token/context awareness~~ ✅ (D13)
 5. ~~Multi-turn~~ ✅ (D12) — still open, lower priority: KV-cache/`Transcript`
    reuse when the provider didn't change between turns; trimming hook pairs

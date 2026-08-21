@@ -49,6 +49,28 @@ public struct OnDeviceProvider: ModelProvider {
         }
     }
 
+    // MARK: Streaming (D16)
+
+    /// Native token streaming via the session's `streamResponse`, with the
+    /// framework's cumulative snapshots converted to deltas (shared helper).
+    public func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        SessionStreaming.stream(
+            prompt: prompt,
+            makeSession: { Self.makeSession(instructions: instructions, history: history) },
+            mapError: { error in
+                if let generation = error as? LanguageModelSession.GenerationError {
+                    return Self.map(generation)
+                }
+                if error is CancellationError { return ProviderError.cancelled }
+                return ProviderError.generation(String(describing: error))
+            }
+        )
+    }
+
     // MARK: Token awareness (D13)
 
     /// Context window of the on-device model. The property is back-deployed:

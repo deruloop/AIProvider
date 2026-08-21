@@ -822,3 +822,204 @@ struct OpenAIParsingTests {
         #expect(OpenAIProvider.parseRetryAfter("nope") == nil)
     }
 }
+
+// MARK: - Streaming (D16)
+
+/// A provider that implements only the required surface — exercises the
+/// protocol's DEFAULT streaming (the whole answer as one fragment).
+private struct BareProvider: ModelProvider {
+    let identifier = ProviderIdentifier("bare")
+    let privacyLevel = PrivacyLevel.onDevice
+    func availability() async -> ProviderAvailability { .available }
+    func respond(
+        to prompt: String, instructions: String?, history: [ChatTurn]
+    ) async throws -> String { "whole answer" }
+}
+
+@Suite("Streaming (D16)")
+struct StreamingTests {
+
+    private func collect(
+        _ stream: AsyncThrowingStream<AIStreamEvent, Error>
+    ) async throws -> [AIStreamEvent] {
+        var events: [AIStreamEvent] = []
+        for try await event in stream { events.append(event) }
+        return events
+    }
+
+    @Test("Default capability: the whole answer arrives as one fragment")
+    func defaultSingleFragment() async throws {
+        let kit = AIOrchestrator(providers: [BareProvider()])
+        let events = try await collect(await kit.streamDetailed(to: "hi"))
+        #expect(events == [
+            .began(provider: ProviderIdentifier("bare"), privacyLevel: .onDevice),
+            .text("whole answer")
+        ])
+    }
+
+    @Test("Fragments arrive in order, after one began event")
+    func fragmentsInOrder() async throws {
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice, streamFragments: ["a", "b", "c"])
+        ])
+        let events = try await collect(await kit.streamDetailed(to: "hi"))
+        #expect(events == [
+            .began(provider: .onDevice, privacyLevel: .onDevice),
+            .text("a"), .text("b"), .text("c")
+        ])
+    }
+
+    @Test("streamResponse convenience yields text fragments only")
+    func textOnlyConvenience() async throws {
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice, streamFragments: ["hel", "lo"])
+        ])
+        var fragments: [String] = []
+        for try await fragment in await kit.streamResponse(to: "hi") {
+            fragments.append(fragment)
+        }
+        #expect(fragments == ["hel", "lo"])
+    }
+
+    @Test("Falls back when a provider fails before its first fragment")
+    func fallsBackBeforeFirstFragment() async throws {
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice,
+                         streamFragments: [],
+                         streamFailure: .rateLimited(retryAfter: nil)),
+            MockProvider(identifier: .openAI,
+                         privacyLevel: .external,
+                         streamFragments: ["cloud"])
+        ])
+        let events = try await collect(await kit.streamDetailed(to: "hi"))
+        #expect(events == [
+            .began(provider: .openAI, privacyLevel: .external),
+            .text("cloud")
+        ])
+    }
+
+    @Test("A mid-stream failure surfaces instead of falling back (D16 rule)")
+    func midStreamFailureSurfaces() async throws {
+        let secondReached = Mutex(false)
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice,
+                         streamFragments: ["partial "],
+                         streamFailure: .network(code: -1)),
+            MockProvider(identifier: .openAI,
+                         streamFragments: ["never"],
+                         onRespond: { _, _, _ in secondReached.withLock { $0 = true } })
+        ])
+
+        var received: [AIStreamEvent] = []
+        var thrown: ProviderError?
+        do {
+            for try await event in await kit.streamDetailed(to: "hi") {
+                received.append(event)
+            }
+        } catch let error as ProviderError {
+            thrown = error
+        }
+
+        // The fragment already shown is kept, the failure surfaces, and the
+        // chain does NOT silently re-answer with the next provider.
+        #expect(received == [
+            .began(provider: .onDevice, privacyLevel: .onDevice),
+            .text("partial ")
+        ])
+        #expect(thrown == .network(code: -1))
+        #expect(secondReached.withLock { $0 } == false)
+    }
+
+    @Test("A terminal pre-fragment error stops the chain")
+    func terminalErrorStopsChain() async throws {
+        let secondReached = Mutex(false)
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice,
+                         streamFragments: [],
+                         streamFailure: .unauthorized),
+            MockProvider(identifier: .openAI,
+                         streamFragments: ["never"],
+                         onRespond: { _, _, _ in secondReached.withLock { $0 = true } })
+        ])
+
+        var thrown: ProviderError?
+        do {
+            for try await _ in await kit.streamDetailed(to: "hi") {}
+        } catch let error as ProviderError {
+            thrown = error
+        }
+        #expect(thrown == .unauthorized)
+        #expect(secondReached.withLock { $0 } == false)
+    }
+
+    @Test("A stream that ends without fragments maps to emptyResponse")
+    func emptyStreamIsEmptyResponse() async throws {
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice, streamFragments: [])
+        ])
+        var thrown: ProviderError?
+        do {
+            for try await _ in await kit.streamDetailed(to: "hi") {}
+        } catch let error as ProviderError {
+            thrown = error
+        }
+        #expect(thrown == .emptyResponse)
+    }
+
+    @Test("denyDowngrade excludes lower-privacy providers when streaming")
+    func denyDowngradeApplies() async throws {
+        let kit = AIOrchestrator(
+            providers: [
+                MockProvider(identifier: .onDevice,
+                             availability: .unavailable(reason: "off"),
+                             streamFragments: ["never"]),
+                MockProvider(identifier: .openAI,
+                             privacyLevel: .external,
+                             streamFragments: ["cloud"])
+            ],
+            privacyDisclosure: .denyDowngrade
+        )
+        var thrown: ProviderError?
+        do {
+            for try await _ in await kit.streamDetailed(to: "hi") {}
+        } catch let error as ProviderError {
+            thrown = error
+        }
+        #expect(thrown == .privacyRestricted)
+    }
+}
+
+// MARK: - SSE parser (D16)
+
+@Suite("SSE parser")
+struct SSEParserTests {
+
+    @Test("Parses data events and the [DONE] sentinel (OpenAI style)")
+    func openAIStyle() {
+        var parser = SSEParser()
+        #expect(parser.consume("data: {\"x\":1}") == nil)
+        #expect(parser.consume("") == ServerSentEvent(event: nil, data: "{\"x\":1}"))
+        #expect(parser.consume("data: [DONE]") == nil)
+        #expect(parser.consume("") == ServerSentEvent(event: nil, data: "[DONE]"))
+    }
+
+    @Test("Carries event names (Anthropic style)")
+    func eventNames() {
+        var parser = SSEParser()
+        #expect(parser.consume("event: content_block_delta") == nil)
+        #expect(parser.consume("data: {\"t\":1}") == nil)
+        #expect(parser.consume("") == ServerSentEvent(
+            event: "content_block_delta", data: "{\"t\":1}"
+        ))
+    }
+
+    @Test("Joins multi-line data, ignores comments and blank dispatches")
+    func multiLineAndComments() {
+        var parser = SSEParser()
+        #expect(parser.consume(": keep-alive") == nil)
+        #expect(parser.consume("data: a") == nil)
+        #expect(parser.consume("data:b") == nil)
+        #expect(parser.consume("") == ServerSentEvent(event: nil, data: "a\nb"))
+        #expect(parser.consume("") == nil)
+    }
+}

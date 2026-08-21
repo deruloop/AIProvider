@@ -15,15 +15,17 @@
 import SwiftUI
 import VoltaSDK
 
-/// A single prompt → response exchange, with provenance.
+/// A single prompt → response exchange, with provenance. `response` is
+/// mutable so a streamed answer can grow in place (D16).
 public struct PlaygroundExchange: Identifiable, Sendable {
     public let id = UUID()
     public let prompt: String
-    public let response: AIResponse
+    public var response: AIResponse
 }
 
 /// Minimal playground the developer can use as-is or as a reference for
-/// their own UI (all the logic goes through `respondDetailed`).
+/// their own UI (all the logic goes through `streamDetailed`: fragments
+/// render as they arrive, and provenance comes from the `.began` event).
 public struct AIPlaygroundView: View {
     private let orchestrator: AIOrchestrator
     private let instructions: String?
@@ -147,18 +149,39 @@ public struct AIPlaygroundView: View {
         let history = conversationHistory
 
         Task {
+            var provider: ProviderIdentifier?
+            var privacy: PrivacyLevel?
+            var streamed = ""
             do {
-                let response = try await orchestrator.respondDetailed(
+                for try await event in await orchestrator.streamDetailed(
                     to: text,
                     instructions: instructions,
                     history: history
-                )
-                exchanges.append(PlaygroundExchange(prompt: text, response: response))
+                ) {
+                    switch event {
+                    case .began(let id, let level):
+                        provider = id
+                        privacy = level
+                        exchanges.append(PlaygroundExchange(
+                            prompt: text,
+                            response: AIResponse(text: "", provider: id, privacyLevel: level)
+                        ))
+                    case .text(let fragment):
+                        streamed += fragment
+                        if let provider, let privacy, let index = exchanges.indices.last {
+                            exchanges[index].response = AIResponse(
+                                text: streamed, provider: provider, privacyLevel: privacy
+                            )
+                        }
+                    }
+                }
                 contextUsage = await orchestrator.contextUsage(
                     instructions: instructions,
                     history: conversationHistory
                 )
             } catch let error as ProviderError {
+                // A mid-stream failure keeps the partial text on screen (D16:
+                // shown text is never retracted) and surfaces the error.
                 errorText = Self.describe(error)
             } catch {
                 errorText = error.localizedDescription

@@ -107,15 +107,9 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         // Stateless per call (D12): the app-supplied history is rebuilt as a
         // native Transcript so PCC sees the conversation as its own — the same
         // shape the on-device provider uses.
-        let session: LanguageModelSession
-        if history.isEmpty {
-            session = LanguageModelSession(model: model, instructions: instructions)
-        } else {
-            let entries = FoundationModelsTranscript.entries(
-                instructions: instructions, history: history
-            )
-            session = LanguageModelSession(model: model, transcript: Transcript(entries: entries))
-        }
+        let session = Self.makeSession(
+            model: model, instructions: instructions, history: history
+        )
 
         do {
             let response = try await session.respond(to: prompt)
@@ -129,6 +123,49 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         } catch {
             throw ProviderError.generation(String(describing: error))
         }
+    }
+
+    // MARK: Streaming (D16)
+
+    /// Native token streaming via the session's `streamResponse` (shared
+    /// helper: cumulative snapshots → deltas). Same entitlement guard and
+    /// error mapping as the buffered path.
+    public func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        guard let model else { return SessionStreaming.failing(.noProviderAvailable) }
+        return SessionStreaming.stream(
+            prompt: prompt,
+            makeSession: { Self.makeSession(model: model, instructions: instructions, history: history) },
+            mapError: { error in
+                if let pcc = error as? PrivateCloudComputeLanguageModel.Error {
+                    return Self.map(pcc)
+                }
+                if let framework = error as? LanguageModelError {
+                    return ProviderError(framework)
+                }
+                if error is CancellationError { return ProviderError.cancelled }
+                return ProviderError.generation(String(describing: error))
+            }
+        )
+    }
+
+    /// Session construction shared by `respond` and `streamResponse` (D12:
+    /// stateless per call, app-supplied history rebuilt as a Transcript).
+    private static func makeSession(
+        model: PrivateCloudComputeLanguageModel,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> LanguageModelSession {
+        guard !history.isEmpty else {
+            return LanguageModelSession(model: model, instructions: instructions)
+        }
+        let entries = FoundationModelsTranscript.entries(
+            instructions: instructions, history: history
+        )
+        return LanguageModelSession(model: model, transcript: Transcript(entries: entries))
     }
 
     // MARK: Token awareness (D13)

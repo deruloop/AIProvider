@@ -60,15 +60,7 @@ struct LanguageModelProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
-        let session: LanguageModelSession
-        if history.isEmpty {
-            session = LanguageModelSession(model: model, instructions: instructions)
-        } else {
-            let entries = FoundationModelsTranscript.entries(
-                instructions: instructions, history: history
-            )
-            session = LanguageModelSession(model: model, transcript: Transcript(entries: entries))
-        }
+        let session = makeSession(instructions: instructions, history: history)
 
         do {
             let response = try await session.respond(to: prompt)
@@ -82,5 +74,45 @@ struct LanguageModelProvider: ModelProvider {
         } catch {
             throw ProviderError.generation(String(describing: error))
         }
+    }
+
+    // MARK: Streaming (D16)
+
+    /// Native token streaming via the session's `streamResponse` (shared
+    /// helper: cumulative snapshots → deltas). The wrapped model streams at
+    /// whatever grain its executor emits — a vendor package with real deltas
+    /// streams for real; a single-fragment executor delivers one delta.
+    func streamResponse(
+        to prompt: String,
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> AsyncThrowingStream<String, Error> {
+        let makeSession: @Sendable () -> LanguageModelSession = { [self] in
+            self.makeSession(instructions: instructions, history: history)
+        }
+        return SessionStreaming.stream(
+            prompt: prompt,
+            makeSession: makeSession,
+            mapError: { error in
+                if let provider = error as? ProviderError { return provider }
+                if let framework = error as? LanguageModelError { return ProviderError(framework) }
+                if error is CancellationError { return ProviderError.cancelled }
+                return ProviderError.generation(String(describing: error))
+            }
+        )
+    }
+
+    /// Session construction shared by both paths (D12: stateless per call).
+    private func makeSession(
+        instructions: String?,
+        history: [ChatTurn]
+    ) -> LanguageModelSession {
+        guard !history.isEmpty else {
+            return LanguageModelSession(model: model, instructions: instructions)
+        }
+        let entries = FoundationModelsTranscript.entries(
+            instructions: instructions, history: history
+        )
+        return LanguageModelSession(model: model, transcript: Transcript(entries: entries))
     }
 }
