@@ -255,10 +255,14 @@ overflow, never inferred from the need.
    PCC streams (native session streaming end-to-end), and a connect-sheet
    Gemini account streams — which exercises SSE against real vendor bytes AND
    the full front-door round-trip (SSE → executor → generation channel →
-   session snapshots → deltas) in one run. Follow-up fix from that session:
+   session snapshots → deltas) in one run. Follow-up fixes from that session:
    the developer key is now TRIMMED before vendor detection and use
-   (`CloudVendor.detect` + `buildCloudProvider`) — a pasted key with a stray
-   newline read as "unknown format" and routed to the wrong vendor.
+   (`CloudVendor.detect` + `buildCloudProvider`), and **Google's new `AQ.`
+   Auth key format is supported** (mid-2026 migration: AI Studio issues only
+   `AQ.…` keys now; detection maps them to Gemini, the provider routes them
+   to the Developer API like `AIza`, with a pre-first-fragment fallback to
+   Code Assist as Bearer for accounts whose AQ keys the Developer API still
+   rejects — the observed-live acceptance path).
    Note: the PCC entitlement wiring
    (CODE_SIGN_ENTITLEMENTS in the demo pbxproj) is a deliberately
    UNCOMMITTED local change — the committed project stays entitlement-free

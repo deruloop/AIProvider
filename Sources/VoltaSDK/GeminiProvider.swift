@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import Synchronization
 
 public struct GeminiProvider: ModelProvider {
 
@@ -84,8 +85,9 @@ public struct GeminiProvider: ModelProvider {
     ) async throws -> String {
         let body = makeBody(prompt: prompt, instructions: instructions, history: history)
 
-        // Credential detection, D15-style: a Google API key always starts with
-        // "AIza" and speaks the Developer API (generativelanguage). Anything
+        // Credential detection, D15-style: an API key — classic "AIza…"
+        // Standard or the new "AQ.…" Auth key (mid-2026 migration) — speaks
+        // the Developer API (generativelanguage, x-goog-api-key). Anything
         // else is an OAuth access token (user-account path, "ya29.…") — and
         // OAuth tokens are a DIFFERENT TRANSPORT, not just a different header:
         // generativelanguage rejects them with ACCESS_TOKEN_SCOPE_INSUFFICIENT
@@ -93,10 +95,39 @@ public struct GeminiProvider: ModelProvider {
         // accepts user tokens (cloud-platform scope) is the Code Assist front
         // end, cloudcode-pa.googleapis.com — the same models behind Google's
         // own Gemini CLI sign-in, with its {model, project, request} envelope.
-        if apiKey.hasPrefix("AIza") {
-            return try await developerAPIRespond(body)
+        if isAPIKey {
+            do {
+                return try await developerAPIRespond(body)
+            } catch let error as ProviderError
+                where apiKey.hasPrefix("AQ.") && Self.isAuthRejection(error) {
+                // Migration fallback (Aug 2026): during Google's move to AQ.
+                // Auth keys, some accounts' keys are rejected by the Developer
+                // API while being accepted as a Bearer credential on the Code
+                // Assist transport (observed live). Try the documented path
+                // first, degrade to the one that works.
+                return try await codeAssistRespond(body)
+            }
         }
         return try await codeAssistRespond(body)
+    }
+
+    /// Whether the configured credential is an API key (Developer API
+    /// transport) as opposed to an OAuth access token (Code Assist).
+    private var isAPIKey: Bool {
+        apiKey.hasPrefix("AIza") || apiKey.hasPrefix("AQ.")
+    }
+
+    /// Auth-class rejections — the only failures worth retrying on the other
+    /// transport during the AQ. key migration.
+    private static func isAuthRejection(_ error: ProviderError) -> Bool {
+        switch error {
+        case .unauthorized:
+            return true
+        case .api(_, let code):
+            return code == "UNAUTHENTICATED" || code == "PERMISSION_DENIED"
+        default:
+            return false
+        }
     }
 
     /// App-supplied history (D12) → user/model turns → current prompt.
@@ -132,7 +163,9 @@ public struct GeminiProvider: ModelProvider {
     /// (`streamGenerateContent?alt=sse`): each SSE event is a chunk whose
     /// candidate parts are text deltas. The Code Assist (OAuth) transport has
     /// no SSE equivalent in its envelope, so it stays buffered — the whole
-    /// answer as one fragment, like the protocol default.
+    /// answer as one fragment, like the protocol default. An AQ. key rejected
+    /// by the Developer API falls back to buffered Code Assist (the same
+    /// migration fallback as `respond`), but only before the first fragment.
     public func streamResponse(
         to prompt: String,
         instructions: String?,
@@ -141,10 +174,24 @@ public struct GeminiProvider: ModelProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    if apiKey.hasPrefix("AIza") {
-                        try await performStream(
-                            prompt: prompt, instructions: instructions, history: history
-                        ) { continuation.yield($0) }
+                    if isAPIKey {
+                        let emitted = Mutex(false)
+                        do {
+                            try await performStream(
+                                prompt: prompt, instructions: instructions, history: history
+                            ) { fragment in
+                                emitted.withLock { $0 = true }
+                                continuation.yield(fragment)
+                            }
+                        } catch let error as ProviderError
+                            where apiKey.hasPrefix("AQ.")
+                                && !emitted.withLock({ $0 })
+                                && Self.isAuthRejection(error) {
+                            let text = try await codeAssistRespond(
+                                makeBody(prompt: prompt, instructions: instructions, history: history)
+                            )
+                            continuation.yield(text)
+                        }
                     } else {
                         let text = try await respond(
                             to: prompt, instructions: instructions, history: history

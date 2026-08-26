@@ -24,15 +24,17 @@ public enum CloudVendor: String, Sendable, CaseIterable, Identifiable {
     public var id: String { rawValue }
 
     /// Best-effort detection from the key format:
-    /// `sk-ant-…` → Anthropic, `AIza…` → Google, `sk-…` → OpenAI.
+    /// `sk-ant-…` → Anthropic, `AIza…`/`AQ.…` → Google, `sk-…` → OpenAI.
     /// Order matters: the Anthropic prefix is a superset of OpenAI's.
+    /// `AQ.` is Google's new "Auth key" format (mid-2026 migration: AI Studio
+    /// now issues only these; `AIza` "Standard" keys are being phased out).
     /// Whitespace/newlines are trimmed first — pasted keys routinely carry
     /// them, and a stray space must not flip the vendor (observed live: a
     /// valid Gemini key read as "unknown format").
     public static func detect(fromKey key: String) -> CloudVendor? {
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.hasPrefix("sk-ant-") { return .anthropic }
-        if key.hasPrefix("AIza") { return .gemini }
+        if key.hasPrefix("AIza") || key.hasPrefix("AQ.") { return .gemini }
         if key.hasPrefix("sk-") { return .openAI }
         return nil
     }

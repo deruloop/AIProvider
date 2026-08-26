@@ -31,6 +31,15 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   (native session path), and a user-connected Gemini account streams through
   the full iOS 27 front door — SSE deltas surviving the executor → generation
   channel → session round-trip.
+- **Google's new `AQ.` Auth keys supported (D15).** Mid-2026, Google began
+  issuing Gemini API keys in a new `AQ.…` "Auth key" format (AI Studio now
+  issues only these; `AIza` "Standard" keys are being phased out). Detection
+  maps `AQ.` to Gemini, and `GeminiProvider` treats both formats as API keys
+  on the Developer API transport (the documented `x-goog-api-key` path, which
+  is also the SSE streaming path). Migration safety net: an `AQ.` key the
+  Developer API rejects with an auth error falls back to the Code Assist
+  transport as a Bearer credential (observed accepted live) — before the
+  first fragment only, per D16.
 - **Fix: the developer key is trimmed before detection and use.** A pasted
   key with a stray space/newline made `CloudVendor.detect` read a valid
   Gemini key as "unknown format" (falling back to OpenAI) and would have

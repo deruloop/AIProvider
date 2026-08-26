@@ -456,6 +456,13 @@ struct CloudVendorTests {
         #expect(CloudVendor.detect(fromKey: " sk-proj-abc") == .openAI)
     }
 
+    @Test("Google's new AQ. Auth keys are detected as Gemini")
+    func detectsNewGoogleAuthKeyFormat() {
+        // Mid-2026 migration: AI Studio now issues only AQ.-prefix keys
+        // (observed live — an adopter's fresh key read as "unknown format").
+        #expect(CloudVendor.detect(fromKey: "AQ.Ab8RN6-abc") == .gemini)
+    }
+
     @Test("Anthropic prefix wins over the OpenAI prefix it contains")
     func anthropicPrefixPrecedence() {
         // "sk-ant-…" also matches "sk-…": order must favor Anthropic.
