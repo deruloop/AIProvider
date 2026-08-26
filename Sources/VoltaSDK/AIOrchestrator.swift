@@ -151,7 +151,7 @@ public struct AIConfiguration: Sendable {
 
     /// Model to use with the developer key. The model name belongs to the
     /// key's vendor (e.g. "gpt-4o-mini" for OpenAI, "claude-opus-4-8" for
-    /// Anthropic, "gemini-2.5-flash" for Gemini — find the current names at
+    /// Anthropic, "gemini-3.6-flash" for Gemini — find the current names at
     /// each vendor's `CloudVendor.modelDocumentationURL`). `nil` = the
     /// vendor's default model.
     public var developerKeyModel: String? = nil

@@ -508,9 +508,43 @@ struct CloudVendorTests {
 
     @Test("Gemini: known windows per model, nil for unknown models")
     func geminiKnownWindows() {
-        #expect(GeminiProvider.knownContextSize(forModel: "gemini-2.5-flash") == 1_048_576)
+        #expect(GeminiProvider.knownContextSize(forModel: "gemini-3.6-flash") == 1_048_576)
         #expect(GeminiProvider.knownContextSize(forModel: "gemini-1.5-pro") == 2_097_152)
         #expect(GeminiProvider.knownContextSize(forModel: "mystery-model") == nil)
+    }
+
+    @Test("Gemini: thinking models get output headroom, older ones don't")
+    func geminiThinkingHeadroom() {
+        #expect(GeminiProvider.thinkingHeadroom(forModel: "gemini-3.6-flash") > 0)
+        #expect(GeminiProvider.thinkingHeadroom(forModel: "gemini-2.5-flash") > 0)
+        #expect(GeminiProvider.thinkingHeadroom(forModel: "gemini-1.5-pro") == 0)
+        #expect(GeminiProvider.thinkingHeadroom(forModel: "gemini-2.0-flash") == 0)
+    }
+
+    @Test("Gemini: a textless answer names its cause")
+    func geminiEmptyAnswerDiagnosis() {
+        // Budget consumed by thinking — the failure this replaced.
+        let budget = GeminiProvider.emptyAnswerError(
+            finishReason: "MAX_TOKENS", blockReason: nil, thoughtTokens: 1000
+        )
+        guard case .api(let message, let code) = budget else {
+            Issue.record("expected an API error, got \(budget)"); return
+        }
+        #expect(code == "MAX_TOKENS")
+        #expect(message.contains("1000 tokens thinking"))
+
+        // Policy stops are guardrail violations, not empty responses.
+        if case .guardrailViolation = GeminiProvider.emptyAnswerError(
+            finishReason: "SAFETY", blockReason: nil, thoughtTokens: nil
+        ) {} else { Issue.record("SAFETY should map to a guardrail violation") }
+        if case .guardrailViolation = GeminiProvider.emptyAnswerError(
+            finishReason: nil, blockReason: "OTHER", thoughtTokens: nil
+        ) {} else { Issue.record("a blocked prompt should map to a guardrail violation") }
+
+        // A clean stop with no text really is an empty response.
+        #expect(GeminiProvider.emptyAnswerError(
+            finishReason: "STOP", blockReason: nil, thoughtTokens: nil
+        ) == .emptyResponse)
     }
 
     @Test("Cloud providers are unavailable without a key")

@@ -67,7 +67,7 @@ questions doc into the design doc; release → CHANGELOG + state here.
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift build|test`;
   the machine's default `xcode-select` is still Command Line Tools). The
   package builds and tests green on the beta (Swift 6.4, macOS 27 SDK on the
-  host, **69 tests in 16 suites** as of the D16 streaming work). First
+  host, **73 tests in 16 suites** as of the Gemini thinking-budget fix). First
   provider shipped on the branch:
   **`PrivateCloudComputeProvider`** (`@available(iOS 27, *)`, wired into
   `buildProviders` at one gate per D14, default-on via
@@ -263,6 +263,14 @@ overflow, never inferred from the need.
    to the Developer API like `AIza`, with a pre-first-fragment fallback to
    Code Assist as Bearer for accounts whose AQ keys the Developer API still
    rejects — the observed-live acceptance path).
+   **Aug 26, 2026 — Gemini model + thinking-budget fix** (adopter-reported):
+   Google retired `gemini-2.5-flash` for new accounts, so `CloudVendor`'s
+   Gemini default is now `gemini-3.6-flash`; and because thinking tokens are
+   spent against `maxOutputTokens`, the 1000-token default produced textless
+   answers (`finishReason: MAX_TOKENS`) that surfaced as "empty response".
+   The provider now adds thinking headroom, joins all non-`thought` parts,
+   and names the cause of any textless answer. See `docs/iOS26-Implementation.md`
+   (`GeminiProvider`, D15).
    Note: the PCC entitlement wiring
    (CODE_SIGN_ENTITLEMENTS in the demo pbxproj) is a deliberately
    UNCOMMITTED local change — the committed project stays entitlement-free

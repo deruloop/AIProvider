@@ -100,6 +100,22 @@ File map:
 - **`GeminiProvider`** — Gemini `generateContent` (`x-goog-api-key`, history
   roles are user/"model", `systemInstruction` top-level). Invalid key
   surfaces as 400 "API key not valid" → mapped to `.unauthorized`.
+  **Thinking models (2.5 and later, August 2026):** thinking tokens are spent
+  against `maxOutputTokens`, so the SDK's 1000-token default was consumed
+  entirely by thinking — a 200 OK candidate with no `content` and
+  `finishReason: MAX_TOKENS`, i.e. an "empty response" (observed live with
+  `gemini-3.6-flash`). Fixed on three levels: the request asks for
+  `maxTokens + thinkingHeadroom(forModel:)` (4096 from 2.5 on, 0 for 1.x/2.0)
+  because `maxTokens` means *tokens of answer*, and raising the ceiling costs
+  nothing — the model thinks and bills either way, the cap only decides
+  whether the answer survives; extraction joins ALL parts and skips
+  `thought: true` summaries instead of reading `parts.first`; and a textless
+  answer is diagnosed by `emptyAnswerError(finishReason:blockReason:thoughtTokens:)`
+  (MAX_TOKENS → actionable `.api`, SAFETY/blocked prompt →
+  `.guardrailViolation`, clean STOP → `.emptyResponse`), on the buffered and
+  streamed paths alike. Response DTOs are fully optional for the same reason:
+  a candidate that produced nothing carries no `content` at all, and decoding
+  must survive it to report why.
 - **`CloudVendor`** (D15) — which vendor a developer key belongs to:
   auto-detected from the key prefix (`sk-ant-` → Anthropic, `AIza` → Gemini,
   `sk-` → OpenAI; order matters), overridable via
@@ -249,7 +265,10 @@ makes sense for the vendor that issued the key. Rationale: D4 frames the dev
 key as "AI included in the app's subscription" — which vendor backs it is the
 developer's business decision, and the framework shouldn't privilege one.
 Implementation notes: Anthropic sends no `temperature` (Opus 4.7+ 400s on
-sampling params); every vendor has list-models endpoints (OpenAI/Anthropic
+sampling params); **vendor defaults are perishable** — Google retired
+`gemini-2.5-flash` for new accounts in August 2026 ("no longer available to
+new users"), so `CloudVendor.defaultModel` moved to `gemini-3.6-flash`; every
+vendor has list-models endpoints (OpenAI/Anthropic
 `GET /v1/models`, Gemini `ListModels`) — fetching them to populate a model
 picker is a roadmap item, not yet built.
 

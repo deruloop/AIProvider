@@ -40,11 +40,15 @@ public enum CloudVendor: String, Sendable, CaseIterable, Identifiable {
     }
 
     /// Model used when the developer doesn't specify one.
+    /// Vendors retire these: Gemini moved off `gemini-2.5-flash` in August
+    /// 2026 (the Developer API rejects it for accounts that never used it —
+    /// "no longer available to new users"), so the default is `3.6-flash`.
+    /// Adopters who need a specific model set `developerKeyModel`.
     public var defaultModel: String {
         switch self {
         case .openAI:    return "gpt-4o-mini"
         case .anthropic: return "claude-opus-4-8"
-        case .gemini:    return "gemini-2.5-flash"
+        case .gemini:    return "gemini-3.6-flash"
         }
     }
 

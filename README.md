@@ -81,7 +81,7 @@ AIOrchestrator.configure {
     // Works with an OpenAI, Claude, or Gemini key — auto-detected:
     $0.developerKey = Bundle.main.object(forInfoDictionaryKey: "AI_API_KEY") as? String
     // Optional. The model name belongs to the key's vendor; nil = the
-    // vendor's default (gpt-4o-mini / claude-opus-4-8 / gemini-2.5-flash).
+    // vendor's default (gpt-4o-mini / claude-opus-4-8 / gemini-3.6-flash).
     $0.developerKeyModel = nil
     $0.preference = .preferOnDevice          // on-device, then developer key
     $0.privacyDisclosure = .notify { downgrade in

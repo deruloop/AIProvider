@@ -152,9 +152,24 @@ public struct GeminiProvider: ModelProvider {
             contents: contents,
             generationConfig: .init(
                 temperature: temperature,
-                maxOutputTokens: maxTokens
+                maxOutputTokens: maxTokens + Self.thinkingHeadroom(forModel: model)
             )
         )
+    }
+
+    /// Extra output budget requested to cover the model's invisible thinking
+    /// pass. Gemini 2.5 and later think by default and those tokens are spent
+    /// against `maxOutputTokens` — so a small budget can be consumed entirely
+    /// by thinking, returning a candidate with NO text and finishReason
+    /// MAX_TOKENS (observed live, August 2026, with the SDK default of 1000).
+    /// VoltaSDK's `maxTokens` means "tokens of answer", so the request asks
+    /// for answer + headroom. Raising the ceiling costs nothing on its own:
+    /// the model thinks (and bills) either way; the cap only decides whether
+    /// the answer survives.
+    static func thinkingHeadroom(forModel model: String) -> Int {
+        // 1.x/2.0 don't think; from 2.5 on it's the default behaviour.
+        if model.hasPrefix("gemini-1") || model.hasPrefix("gemini-2.0") { return 0 }
+        return 4096
     }
 
     // MARK: Streaming (D16)
@@ -257,6 +272,10 @@ public struct GeminiProvider: ModelProvider {
         }
 
         var parser = SSEParser()
+        var emittedAny = false
+        var finishReason: String?
+        var blockReason: String?
+        var thoughtTokens: Int?
         do {
             for try await line in bytes.lines {
                 guard let event = parser.consume(line) else { continue }
@@ -268,15 +287,34 @@ public struct GeminiProvider: ModelProvider {
                     )
                 }
                 if let chunk = try? JSONDecoder().decode(GeminiStreamChunk.self, from: payload) {
+                    // The last chunks explain how the generation ended — keep
+                    // them, so a stream that never produces text can say why.
+                    finishReason = chunk.candidates?.first?.finishReason ?? finishReason
+                    blockReason = chunk.promptFeedback?.blockReason ?? blockReason
+                    thoughtTokens = chunk.usageMetadata?.thoughtsTokenCount ?? thoughtTokens
                     let delta = (chunk.candidates?.first?.content?.parts ?? [])
+                        .filter { $0.thought != true }     // thought summaries aren't answer text
                         .compactMap(\.text)
                         .joined()
-                    if !delta.isEmpty { onFragment(delta) }
+                    if !delta.isEmpty {
+                        emittedAny = true
+                        onFragment(delta)
+                    }
                 }
             }
         } catch let urlError as URLError {
             if urlError.code == .cancelled { throw ProviderError.cancelled }
             throw ProviderError.network(code: urlError.errorCode)
+        }
+
+        // Same diagnosis as the buffered path: a stream of thought and no
+        // answer is a budget (or policy) problem, not a mystery.
+        guard emittedAny else {
+            throw Self.emptyAnswerError(
+                finishReason: finishReason,
+                blockReason: blockReason,
+                thoughtTokens: thoughtTokens
+            )
         }
     }
 
@@ -432,12 +470,49 @@ public struct GeminiProvider: ModelProvider {
         }
     }
 
+    /// Joins every ANSWER part. Two reasons not to read `parts.first`:
+    /// long answers arrive split across parts, and thinking models put
+    /// thought summaries in the same array, flagged `thought: true`.
     private static func extractText(_ response: GenerateResponse) throws -> String {
-        guard let text = response.candidates?.first?.content.parts.first?.text,
-              !text.isEmpty else {
-            throw ProviderError.emptyResponse
+        let candidate = response.candidates?.first
+        let text = (candidate?.content?.parts ?? [])
+            .filter { $0.thought != true }
+            .compactMap(\.text)
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.isEmpty else { return text }
+        throw emptyAnswerError(
+            finishReason: candidate?.finishReason,
+            blockReason: response.promptFeedback?.blockReason,
+            thoughtTokens: response.usageMetadata?.thoughtsTokenCount
+        )
+    }
+
+    /// Gemini can answer 200 OK with no text for several unrelated reasons;
+    /// a bare "empty response" tells the developer nothing about what to
+    /// change, so each one gets its own error.
+    static func emptyAnswerError(
+        finishReason: String?,
+        blockReason: String?,
+        thoughtTokens: Int?
+    ) -> ProviderError {
+        if let blockReason {
+            return .guardrailViolation("Gemini blocked the prompt (\(blockReason)).")
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch finishReason {
+        case "MAX_TOKENS":
+            let spent = thoughtTokens.map { " It spent \($0) tokens thinking first." } ?? ""
+            return .api(
+                message: "Gemini reached the output-token limit before writing any answer.\(spent) Raise `maxTokens`, or choose a model that thinks less.",
+                code: "MAX_TOKENS"
+            )
+        case "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII":
+            return .guardrailViolation("Gemini stopped for policy reasons (\(finishReason ?? "")).")
+        case .some(let reason) where reason != "STOP":
+            return .api(message: "Gemini returned no text (finishReason: \(reason)).", code: reason)
+        default:
+            return .emptyResponse
+        }
     }
 }
 
@@ -463,28 +538,39 @@ private struct GenerateRequest: Encodable {
     }
 }
 
+/// A tolerant subset of `GenerateContentResponse`: every field is optional
+/// because a candidate that produced nothing carries no `content` at all —
+/// decoding must survive that and report WHY (`finishReason`) instead of
+/// failing.
 private struct GenerateResponse: Decodable {
     let candidates: [Candidate]?
+    let usageMetadata: UsageMetadata?
+    let promptFeedback: PromptFeedback?
 
     struct Candidate: Decodable {
-        let content: Content
+        let content: Content?
+        let finishReason: String?
     }
     struct Content: Decodable {
-        let parts: [Part]
+        let parts: [Part]?
     }
     struct Part: Decodable {
         let text: String?
+        /// `true` marks a thought summary, not answer text.
+        let thought: Bool?
+    }
+    struct UsageMetadata: Decodable {
+        let thoughtsTokenCount: Int?
+        let candidatesTokenCount: Int?
+    }
+    struct PromptFeedback: Decodable {
+        let blockReason: String?
     }
 }
 
-/// One SSE chunk of a streamed generation — a tolerant subset of
-/// `GenerateContentResponse` (final chunks may carry no content at all).
-private struct GeminiStreamChunk: Decodable {
-    let candidates: [Candidate]?
-    struct Candidate: Decodable { let content: Content? }
-    struct Content: Decodable { let parts: [Part]? }
-    struct Part: Decodable { let text: String? }
-}
+/// One SSE chunk of a streamed generation — the same shape; final chunks
+/// carry the finish reason and usage with no content.
+private typealias GeminiStreamChunk = GenerateResponse
 
 private struct GeminiErrorEnvelope: Decodable {
     let error: APIError
