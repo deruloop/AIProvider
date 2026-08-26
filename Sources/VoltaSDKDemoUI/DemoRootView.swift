@@ -280,6 +280,11 @@ public struct DemoRootView: View {
             Section {
                 ProviderStatusList(orchestrator: orchestrator)
             }
+            // The Dynamic Profiles bridge (D1): a native profile fed by the
+            // chain's resolved model. iOS 27 machinery — absent on 26.
+            if #available(iOS 27.0, macOS 27.0, *) {
+                ProfileBridgeSection(orchestrator: orchestrator)
+            }
         }
         .formStyle(.grouped)
         .scrollDismissesKeyboard(.interactively)

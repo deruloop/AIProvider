@@ -206,8 +206,17 @@ Next steps, in order:
    confirmed conforming by compilation; PCC → entitled model, nil-gated;
    wrapped models → themselves; developer-key REST → `CloudAccountLanguageModel`
    over the same client). Per-need overload arrives with step 3's chains.
-   Not yet validated live in a real Dynamic Profile — that's the Part 3
-   article's build.
+   **Part 3 build STARTED (Aug 2026):** the Dynamic Profiles API is read from
+   the `.swiftinterface` and recorded in `docs/iOS27-Design.md` §8 (Profile
+   leaf + `Instructions` + full modifier list + `SessionProperty` +
+   `LanguageModelSession(profile:history:)` — the `history:` slot is D12's
+   entry point). Demo ships `ProfileBridgeSection`: a native profile whose
+   `.model(...)` is `preferred()`, streamed through the profile's session.
+   Two Swift 6 findings recorded (resolve-then-declare — `preferred()` is
+   async, modifiers aren't; `sending profile:` rejects @MainActor-declared
+   profiles → nonisolated helper). LIVE VALIDATION PENDING: run macOSDemo,
+   ask the profile, confirm the resolved model answers (on-device/PCC/
+   connected account) — that run is Part 3's proof beat.
 3. **Per-need fallback chain** (`.lightweight/.reasoning/.largeContext`),
    keeping `ModelPreference` at 4 cases (a third tier makes the closed enum
    combinatorial).

@@ -342,3 +342,37 @@ a portability mechanism.
 `SystemLanguageModel.availability` (unchanged from 26) for on-device;
 `PrivateCloudComputeLanguageModel.availability` + `isAvailable` for PCC, with
 the reasons above.
+
+**Dynamic Profiles (verified against beta 27A5237l, Aug 2026 — the Part 3
+build).** Read from the same `.swiftinterface`; exercised by the demo's
+`ProfileBridgeSection`.
+- **Shape:** `LanguageModelSession.DynamicProfile` is SwiftUI-style —
+  `associatedtype Body: DynamicProfile`, `@DynamicProfileBuilder var body`
+  (single active profile per body; `buildEither` gives conditionals;
+  `AnyDynamicProfile` erases). The leaf is `LanguageModelSession.Profile`,
+  whose initializer takes a `@DynamicInstructionsBuilder` closure — text
+  enters as `Instructions("…")` (`Instructions: DynamicInstructions`, line
+  1115), and `Tool`s / `[any Tool]` can be listed in the same builder.
+- **Modifiers** (all `some DynamicProfile -> some DynamicProfile`):
+  `.model(any/some LanguageModel)`, `.temperature`, `.samplingMode`,
+  `.maximumResponseTokens`, `.reasoningLevel`, `.toolCallingMode`,
+  `.historyTransform([Transcript.Entry] -> [Transcript.Entry])`,
+  `.transcriptErrorHandlingPolicy`, plus lifecycle hooks `.onPrompt`,
+  `.onResponse`, `.onReasoning`, `.onToolCall`, `.onToolOutput`,
+  `.onActivate`, `.onDeactivate`. A `SessionProperty` wrapper +
+  `SessionPropertyValues` provide profile-scoped state.
+- **Session entry:** `LanguageModelSession(profile: sending some
+  DynamicProfile, history: some Collection<Transcript.Entry> = [])` — the
+  `history:` slot is exactly where D12's app-supplied transcript goes.
+- **Two integration findings (learned by compiling):**
+  1. *Resolve-then-declare.* `preferred()` is async (availability walks);
+     `.model(...)` is a synchronous modifier — so the D1 dream syntax
+     `.model(orchestrator.preferred())` cannot be written inline. The
+     pattern: `let model = try await orchestrator.preferred()` first, then
+     declare the profile around the value. Per-call re-resolution (D7)
+     survives by resolving inside the action that builds the session.
+  2. *`sending` + isolation inheritance.* The session's `profile:` parameter
+     is `sending`; a profile declared inside a `@MainActor` view inherits the
+     actor's isolation through its instructions closure and can never be
+     sent — same Swift 6 trap as the OAuth completion (July). Fix: declare
+     the profile in a `nonisolated` helper so its region stays disconnected.

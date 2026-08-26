@@ -11,6 +11,15 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
+- **Demo: a native Dynamic Profile fed by the chain.** New "Dynamic Profile
+  (iOS 27)" section in the demo UI (`ProfileBridgeSection`): a
+  `LanguageModelSession.Profile` declared entirely in Apple's API
+  (`Instructions`, `.temperature`) whose `.model(...)` is
+  `orchestrator.preferred()` — resolved per run (D7), answer streamed via the
+  profile's session. Documents two Swift 6 findings: `preferred()` is async
+  vs. synchronous profile modifiers (resolve-then-declare), and the session's
+  `sending profile:` parameter rejects profiles declared in `@MainActor`
+  context (isolation inheritance — built in a `nonisolated` helper).
 - **Dynamic Profiles bridge (D1): `preferred()`.** New
   `AIOrchestrator.preferred() -> any LanguageModel` (iOS 27): resolves the
   chain exactly like `resolveProvider()` (availability + `.denyDowngrade`)
