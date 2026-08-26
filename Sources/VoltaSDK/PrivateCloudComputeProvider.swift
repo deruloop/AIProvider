@@ -224,3 +224,13 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         return "Private Cloud Compute daily quota reached"
     }
 }
+
+// MARK: - Dynamic Profiles bridge (D1)
+
+@available(iOS 27.0, macOS 27.0, *)
+extension PrivateCloudComputeProvider: LanguageModelConvertible {
+    /// `nil` in an unentitled process — the model is never created there
+    /// (see `model`), so the bridge skips PCC instead of handing a Dynamic
+    /// Profile a model that would trap.
+    public var languageModel: (any LanguageModel)? { model }
+}

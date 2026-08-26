@@ -18,6 +18,7 @@
 //
 
 import Foundation
+import FoundationModels
 
 public struct OpenAIProvider: ModelProvider {
 
@@ -278,6 +279,19 @@ public struct OpenAIProvider: ModelProvider {
     /// `Retry-After` parsing, shared with the other cloud providers.
     static func parseRetryAfter(_ value: String?) -> TimeInterval? {
         RetryAfterParser.parse(value)
+    }
+}
+
+// MARK: - Dynamic Profiles bridge (D1)
+
+@available(iOS 27.0, macOS 27.0, *)
+extension OpenAIProvider: LanguageModelConvertible {
+    /// The developer-key provider as a native `LanguageModel`: the same REST
+    /// client, wrapped in `CloudAccountLanguageModel` keyed by vendor + key.
+    /// Generation options (temperature, max tokens) then come from the
+    /// consuming session/profile per call — the profile owns them.
+    public var languageModel: (any LanguageModel)? {
+        CloudAccountLanguageModel(vendor: .openAI, apiKey: apiKey, model: model)
     }
 }
 

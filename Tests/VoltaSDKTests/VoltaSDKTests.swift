@@ -1073,3 +1073,81 @@ struct SSEParserTests {
         #expect(parser.consume("") == nil)
     }
 }
+
+// MARK: - Dynamic Profiles bridge (iOS 27, D1)
+
+@Suite("Dynamic Profiles bridge (iOS 27)")
+struct PreferredBridgeTests {
+
+    @Test("preferred() returns the first available provider's native model")
+    func returnsFirstAvailableModel() async throws {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
+        let account = CloudAccountLanguageModel(
+            vendor: .gemini, apiKey: "AIza-test", model: "gemini-test"
+        )
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice, availability: .unavailable(reason: "off")),
+            LanguageModelProvider(
+                identifier: .userAccount(.gemini),
+                privacyLevel: .external,
+                model: account,
+                connected: true
+            )
+        ])
+        let model = try await kit.preferred()
+        let cloud = try #require(model as? CloudAccountLanguageModel)
+        #expect(cloud.vendor == .gemini)
+        #expect(cloud.modelName == "gemini-test")
+    }
+
+    @Test("Developer-key providers bridge via CloudAccountLanguageModel")
+    func developerKeyBridges() async throws {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
+        let kit = AIOrchestrator(providers: [
+            OpenAIProvider(apiKey: "sk-test", model: "gpt-test")
+        ])
+        let model = try await kit.preferred()
+        let cloud = try #require(model as? CloudAccountLanguageModel)
+        #expect(cloud.vendor == .openAI)
+        #expect(cloud.modelName == "gpt-test")
+    }
+
+    @Test("Providers that cannot bridge are skipped, not fatal")
+    func skipsNonConvertible() async throws {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
+        let kit = AIOrchestrator(providers: [
+            // Available, would win respond() — but not LanguageModelConvertible.
+            MockProvider(identifier: ProviderIdentifier("custom"), outcome: .success("mock")),
+            AnthropicProvider(apiKey: "sk-ant-test")
+        ])
+        let model = try await kit.preferred()
+        let cloud = try #require(model as? CloudAccountLanguageModel)
+        #expect(cloud.vendor == .anthropic)
+    }
+
+    @Test("denyDowngrade excludes lower-privacy models from the bridge")
+    func denyDowngradeExcludes() async throws {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
+        let kit = AIOrchestrator(
+            providers: [
+                MockProvider(identifier: .onDevice, availability: .unavailable(reason: "off")),
+                GeminiProvider(apiKey: "AIza-test")
+            ],
+            privacyDisclosure: .denyDowngrade
+        )
+        var thrown: ProviderError?
+        do { _ = try await kit.preferred() } catch let error as ProviderError { thrown = error }
+        #expect(thrown == .noProviderAvailable)
+    }
+
+    @Test("No convertible provider at all throws noProviderAvailable")
+    func emptyChainThrows() async throws {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
+        let kit = AIOrchestrator(providers: [
+            MockProvider(identifier: ProviderIdentifier("custom"), outcome: .success("mock"))
+        ])
+        var thrown: ProviderError?
+        do { _ = try await kit.preferred() } catch let error as ProviderError { thrown = error }
+        #expect(thrown == .noProviderAvailable)
+    }
+}

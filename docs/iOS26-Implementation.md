@@ -315,6 +315,7 @@ try await kit.respondDetailed(to:instructions:history:) -> AIResponse  // + prov
 await kit.streamResponse(to:instructions:history:) -> AsyncThrowingStream<String, Error>       // (D16)
 await kit.streamDetailed(to:instructions:history:) -> AsyncThrowingStream<AIStreamEvent, Error> // + provenance
 try await kit.resolveProvider() -> any ModelProvider            // the primitive (D9)
+try await kit.preferred() -> any LanguageModel     // iOS 27: Dynamic Profiles bridge (D1)
 await kit.contextUsage(instructions:history:) -> ContextUsage?  // window pressure (D13)
 await kit.availableProviders() -> [ProviderIdentifier]
 await kit.providerStatuses() -> [ProviderStatus]                // for UI

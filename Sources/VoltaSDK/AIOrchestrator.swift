@@ -545,8 +545,8 @@ public actor AIOrchestrator {
 
     /// Returns the first available provider in the chain WITHOUT executing
     /// anything. This is the "model resolution" primitive — the framework's
-    /// core value. On iOS 27 it evolves into `preferred(_ need:)`, returning
-    /// a `LanguageModel` to pass into a native Dynamic Profile.
+    /// core value. On iOS 27, `preferred()` builds on the same walk to return
+    /// a native `LanguageModel` for Dynamic Profiles (D1).
     ///
     /// Note: it applies availability only, not the interactive disclosure
     /// (.askOnPrivacyChange only makes sense inside the `respond` loop).
@@ -566,6 +566,47 @@ public actor AIOrchestrator {
                 continue
             }
             return provider
+        }
+        throw ProviderError.noProviderAvailable
+    }
+
+    /// The Dynamic Profiles bridge (D1): resolves the chain exactly like
+    /// `resolveProvider()` and returns the winning provider as a native
+    /// Apple `LanguageModel` — ready to drop into a `DynamicProfile`'s
+    /// `.model(...)` or a `LanguageModelSession(model:)`. The developer
+    /// writes the agent entirely in Apple's language; VoltaSDK contributes
+    /// one expression: which model.
+    ///
+    /// Resolution-time policy only, like `resolveProvider()`: availability
+    /// gates the walk and `.denyDowngrade` excludes lower-privacy providers,
+    /// but per-call disclosure does not travel with the returned model — the
+    /// consuming session/profile owns the calls (and their generation
+    /// options) from there. Providers that cannot express themselves as a
+    /// `LanguageModel` (custom `ModelProvider`s that don't adopt
+    /// `LanguageModelConvertible`) are skipped.
+    ///
+    /// A per-need overload (`preferred(_ need:)`) arrives with the per-need
+    /// chains milestone.
+    @available(iOS 27.0, macOS 27.0, *)
+    public func preferred() async throws -> any LanguageModel {
+        guard let first = orderedProviders.first else {
+            throw ProviderError.noProviderAvailable
+        }
+        let baseline = first.privacyLevel
+
+        for provider in orderedProviders {
+            if case .unavailable = await provider.availability() {
+                continue
+            }
+            if case .denyDowngrade = privacyDisclosure,
+               provider.privacyLevel < baseline {
+                continue
+            }
+            guard let convertible = provider as? any LanguageModelConvertible,
+                  let model = convertible.languageModel else {
+                continue
+            }
+            return model
         }
         throw ProviderError.noProviderAvailable
     }

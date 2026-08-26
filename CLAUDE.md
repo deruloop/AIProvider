@@ -67,7 +67,7 @@ questions doc into the design doc; release → CHANGELOG + state here.
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift build|test`;
   the machine's default `xcode-select` is still Command Line Tools). The
   package builds and tests green on the beta (Swift 6.4, macOS 27 SDK on the
-  host, **73 tests in 16 suites** as of the Gemini thinking-budget fix). First
+  host, **78 tests in 17 suites** as of the preferred() bridge). First
   provider shipped on the branch:
   **`PrivateCloudComputeProvider`** (`@available(iOS 27, *)`, wired into
   `buildProviders` at one gate per D14, default-on via
@@ -198,10 +198,16 @@ Next steps, in order:
    re-verify of every §8-derived claim). The
    Utilities Chat-Completions `LanguageModel` (Q8) is still unchecked — proceeded
    hand-written.
-2. **`preferred(_ need:) -> any LanguageModel`** bridge (D1/D9): evolve
-   `resolveProvider()` to return Apple's `LanguageModel` (confirmed feedable to
-   `.model(_:)` and `LanguageModelSession(model:)`, §8) for native Dynamic
-   Profiles. Needs each VoltaSDK provider to expose/wrap an `any LanguageModel`.
+2. ~~`preferred(_ need:) -> any LanguageModel` bridge~~ ✅ **shipped as
+   `preferred()` (Aug 2026, xcode27, 78 tests/17 suites green).** Same chain
+   walk as `resolveProvider()`; returns the winning provider's native
+   `LanguageModel` via the new public `LanguageModelConvertible` capability
+   (all five built-ins adopt it: on-device → `SystemLanguageModel.default` —
+   confirmed conforming by compilation; PCC → entitled model, nil-gated;
+   wrapped models → themselves; developer-key REST → `CloudAccountLanguageModel`
+   over the same client). Per-need overload arrives with step 3's chains.
+   Not yet validated live in a real Dynamic Profile — that's the Part 3
+   article's build.
 3. **Per-need fallback chain** (`.lightweight/.reasoning/.largeContext`),
    keeping `ModelPreference` at 4 cases (a third tier makes the closed enum
    combinatorial).
@@ -284,8 +290,11 @@ overflow, never inferred from the need.
    (`docs/iOS27-Design.md` §6/§8). Was blocked; SDK now in hand.
 7. **Per-need fallback chain** (`.lightweight/.reasoning/.largeContext`) —
    unblocked with 6; not started.
-8. **`preferred(_ need:)` bridge** for Dynamic Profiles — unblocked with 6
-   (returns `any LanguageModel`, feedable to `.model(_:)`, §8); not started.
+8. ~~`preferred()` bridge~~ ✅ (Aug 2026, xcode27): returns the resolved
+   provider's native `any LanguageModel` via the public
+   `LanguageModelConvertible` capability (all five built-ins adopt it);
+   feedable to `.model(_:)` / `LanguageModelSession(model:)`. Per-need
+   overload lands with 7; live Dynamic-Profile validation = Part 3's build.
 9. ~~Model picker component~~ ✅ (June 2026): `ModelSelector` in VoltaSDKUI —
    collapsed user-side picker; selection answered by the app with
    `.activate`/`.deny`/`.deferred` (deferred = app-owned flow commits later

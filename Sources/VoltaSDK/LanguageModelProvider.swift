@@ -116,3 +116,13 @@ struct LanguageModelProvider: ModelProvider {
         return LanguageModelSession(model: model, transcript: Transcript(entries: entries))
     }
 }
+
+// MARK: - Dynamic Profiles bridge (D1)
+
+@available(iOS 27.0, macOS 27.0, *)
+extension LanguageModelProvider: LanguageModelConvertible {
+    /// The wrapped model, returned as-is: for user accounts that's the
+    /// `CloudAccountLanguageModel`, for `customModels` the vendor's own
+    /// conformance — exactly the value a Dynamic Profile should receive.
+    var languageModel: (any LanguageModel)? { model }
+}

@@ -11,6 +11,19 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
+- **Dynamic Profiles bridge (D1): `preferred()`.** New
+  `AIOrchestrator.preferred() -> any LanguageModel` (iOS 27): resolves the
+  chain exactly like `resolveProvider()` (availability + `.denyDowngrade`)
+  and returns the winning provider's **native Apple `LanguageModel`** — ready
+  for `.model(orchestrator.preferred())` in a `DynamicProfile` or
+  `LanguageModelSession(model:)`. Backed by the new public
+  `LanguageModelConvertible` capability, adopted by all five built-ins:
+  on-device → `SystemLanguageModel.default`, PCC → its entitled model
+  (nil-gated so an unentitled process is skipped, never trapped), wrapped
+  user-account/custom models → themselves, developer-key OpenAI/Claude/Gemini
+  → a `CloudAccountLanguageModel` over the same REST client. Custom providers
+  can adopt the protocol to join; non-convertible ones are skipped. A
+  per-need overload (`preferred(_ need:)`) lands with the per-need chains.
 - **Streaming (D16).** New `streamResponse` / `streamDetailed` on
   `AIOrchestrator`: the answer as ordered text deltas through the same
   resolution-and-fallback chain as `respond`, with a `.began` provenance event

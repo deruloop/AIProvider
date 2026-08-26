@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import FoundationModels
 import Synchronization
 
 public struct GeminiProvider: ModelProvider {
@@ -618,5 +619,16 @@ private struct OnboardLRO: Decodable {
     struct Response: Decodable {
         let cloudaicompanionProject: Project?
         struct Project: Decodable { let id: String? }
+    }
+}
+
+// MARK: - Dynamic Profiles bridge (D1)
+
+@available(iOS 27.0, macOS 27.0, *)
+extension GeminiProvider: LanguageModelConvertible {
+    /// The developer-key provider as a native `LanguageModel` (see the note
+    /// on `OpenAIProvider.languageModel`).
+    public var languageModel: (any LanguageModel)? {
+        CloudAccountLanguageModel(vendor: .gemini, apiKey: apiKey, model: model)
     }
 }

@@ -149,7 +149,7 @@ Completions `LanguageModel` (Q8) turns out not to cover them.
 | `OnDeviceProvider` | unchanged |
 | `OpenAIProvider`/`AnthropicProvider`/`GeminiProvider` (URLSession, dev key, D15) | providers conforming to the `LanguageModel` protocol; user-account variants added |
 | `ModelPreference` (4 cases, deliberately frozen) | per-need fallback chain + PCC quotas |
-| `resolveProvider()` (D9) | `preferred(_ need:)` returning a `LanguageModel` for Dynamic Profiles |
+| `resolveProvider()` (D9) | `preferred()` ✅ (xcode27) returning a `LanguageModel` for Dynamic Profiles; per-need overload pending |
 | `PrivacyDisclosure` (live since 26) | unchanged; `.appleCloud` level becomes reachable (PCC) |
 | `ProviderError.isRecoverableByFallback` | PCC's `.quotaLimitReached` maps to the existing recoverable `.rateLimited(retryAfter:)`; `.serviceUnavailable`/`.networkFailure` map to recoverable `.network` (Q2/Q4 answered — no new enum case needed) |
 | D13 capability surface (`contextSize`/`tokenCount`) | per-model token reading lands here (pending Q10) |
@@ -172,7 +172,17 @@ Matches the roadmap in CLAUDE.md:
 2. Runtime fallback chain keyed on need (`.lightweight/.reasoning/.largeContext`),
    replacing/extending `ModelPreference` (kept at 4 cases on purpose — a third
    provider makes a closed enum combinatorial).
-3. `preferred(_ need:)` bridge for Dynamic Profiles, evolving `resolveProvider()`.
+3. ~~`preferred(_ need:)` bridge for Dynamic Profiles~~ ✅ **shipped as
+   `preferred()` (Aug 2026, xcode27)** — same chain walk as `resolveProvider()`
+   (availability + `.denyDowngrade`), returns the winning provider's native
+   `any LanguageModel` via the public `LanguageModelConvertible` capability:
+   on-device → `SystemLanguageModel.default` (confirmed conforming), PCC → its
+   entitled model instance (nil-gated), wrapped models → themselves, and the
+   developer-key REST providers → a `CloudAccountLanguageModel` over the same
+   client (generation options then belong to the consuming session/profile —
+   Apple's design). Non-convertible custom providers are skipped. The
+   per-need parameter (`preferred(_ need:)`) arrives with step 2's chains as
+   an additive overload.
 4. ~~Model picker component~~ shipped (`ModelSelector` in VoltaSDKUI): the new
    providers appear automatically once wired into `buildProviders`; their OAuth
    flows attach via the existing `activation` hook. **Done (June 2026):** PCC

@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import FoundationModels
 
 public struct AnthropicProvider: ModelProvider {
 
@@ -287,6 +288,17 @@ public struct AnthropicProvider: ModelProvider {
         default:
             return .api(message: error.message, code: error.type)
         }
+    }
+}
+
+// MARK: - Dynamic Profiles bridge (D1)
+
+@available(iOS 27.0, macOS 27.0, *)
+extension AnthropicProvider: LanguageModelConvertible {
+    /// The developer-key provider as a native `LanguageModel` (see the note
+    /// on `OpenAIProvider.languageModel`).
+    public var languageModel: (any LanguageModel)? {
+        CloudAccountLanguageModel(vendor: .anthropic, apiKey: apiKey, model: model)
     }
 }
 
