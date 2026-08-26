@@ -702,9 +702,13 @@ public actor AIOrchestrator {
 
     /// The developer key is vendor-agnostic (D15): explicit vendor wins,
     /// otherwise it's detected from the key format, with OpenAI as the
-    /// documented fallback for unrecognized formats.
+    /// documented fallback for unrecognized formats. The key is trimmed:
+    /// pasted keys routinely carry whitespace/newlines, which would break
+    /// both detection and the auth header.
     static func buildCloudProvider(from config: AIConfiguration) -> (any ModelProvider)? {
-        guard let key = config.developerKey, !key.isEmpty else { return nil }
+        guard let key = config.developerKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !key.isEmpty else { return nil }
         let vendor = config.developerKeyVendor ?? CloudVendor.detect(fromKey: key) ?? .openAI
         let model = config.developerKeyModel ?? vendor.defaultModel
 

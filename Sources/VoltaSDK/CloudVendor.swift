@@ -26,7 +26,11 @@ public enum CloudVendor: String, Sendable, CaseIterable, Identifiable {
     /// Best-effort detection from the key format:
     /// `sk-ant-…` → Anthropic, `AIza…` → Google, `sk-…` → OpenAI.
     /// Order matters: the Anthropic prefix is a superset of OpenAI's.
+    /// Whitespace/newlines are trimmed first — pasted keys routinely carry
+    /// them, and a stray space must not flip the vendor (observed live: a
+    /// valid Gemini key read as "unknown format").
     public static func detect(fromKey key: String) -> CloudVendor? {
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.hasPrefix("sk-ant-") { return .anthropic }
         if key.hasPrefix("AIza") { return .gemini }
         if key.hasPrefix("sk-") { return .openAI }

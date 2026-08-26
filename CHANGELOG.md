@@ -27,8 +27,15 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   single-fragment gap from session 339), and `AIPlaygroundView` renders
   fragments as they arrive. New public type `AIStreamEvent`; `MockProvider`
   gains `streamFragments`/`streamFailure` for testing streamed chains.
-  **Validated live on PCC** (entitled `macOSDemo`, macOS 27 on an M2 host):
-  Apple's cloud model streams progressively through the chain.
+  **Validated live** (`macOSDemo`, macOS 27 on an M2 host): PCC streams
+  (native session path), and a user-connected Gemini account streams through
+  the full iOS 27 front door — SSE deltas surviving the executor → generation
+  channel → session round-trip.
+- **Fix: the developer key is trimmed before detection and use.** A pasted
+  key with a stray space/newline made `CloudVendor.detect` read a valid
+  Gemini key as "unknown format" (falling back to OpenAI) and would have
+  broken the auth header. `detect(fromKey:)` and `buildCloudProvider` now
+  trim whitespace/newlines (observed live; regression-tested).
 - **Private Cloud Compute provider (D6).** New `PrivateCloudComputeProvider`
   wraps `PrivateCloudComputeLanguageModel` behind the existing `ModelProvider`
   surface: Apple's free "powered" tier — no key, no account, a per-user daily

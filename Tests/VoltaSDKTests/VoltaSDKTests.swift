@@ -447,6 +447,15 @@ struct CloudVendorTests {
         #expect(CloudVendor.detect(fromKey: "mystery") == nil)
     }
 
+    @Test("Detection tolerates pasted whitespace around the key")
+    func detectionTrimsWhitespace() {
+        // Observed live: a valid Gemini key pasted with a stray newline read
+        // as "unknown format" and was routed to the wrong vendor.
+        #expect(CloudVendor.detect(fromKey: " AIzaSyD-abc\n") == .gemini)
+        #expect(CloudVendor.detect(fromKey: "\nsk-ant-api03-abc ") == .anthropic)
+        #expect(CloudVendor.detect(fromKey: " sk-proj-abc") == .openAI)
+    }
+
     @Test("Anthropic prefix wins over the OpenAI prefix it contains")
     func anthropicPrefixPrecedence() {
         // "sk-ant-…" also matches "sk-…": order must favor Anthropic.
