@@ -27,7 +27,7 @@ import os
 /// availability, the token pre-flight (D13), and the privacy policy still
 /// walk the whole (reordered) chain, so a need can never strand a call that
 /// a lower-ranked provider could have served.
-public enum ModelNeed: Sendable, Equatable {
+public enum ModelNeed: Sendable, Hashable {
     /// Favour cheap, fast, private: on-device → PCC → external.
     case lightweight
     /// Favour capable models: PCC (the reasoning-capable free tier) →

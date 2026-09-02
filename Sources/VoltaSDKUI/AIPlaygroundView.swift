@@ -72,6 +72,8 @@ public struct AIPlaygroundView: View {
     @State private var isLoading = false
     @State private var contextUsage: ContextUsage?
     @State private var usesAlternateEngine = false
+    /// Per-call need (D7) applied to the next message on the chain driver.
+    @State private var need: ModelNeed?
 
     public init(
         orchestrator: AIOrchestrator,
@@ -155,6 +157,25 @@ public struct AIPlaygroundView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            // Per-call need (D7): reorders the chain for the next message.
+            // Applies to the chain driver; an alternate engine resolves its
+            // own way, so the control is disabled there.
+            HStack(spacing: 8) {
+                Text("Need")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Need", selection: $need) {
+                    Text("Auto").tag(ModelNeed?.none)
+                    Text("Lightweight").tag(ModelNeed?.some(.lightweight))
+                    Text("Reasoning").tag(ModelNeed?.some(.reasoning))
+                    Text("Large context").tag(ModelNeed?.some(.largeContext))
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .disabled(usesAlternateEngine)
+            .opacity(usesAlternateEngine ? 0.5 : 1)
+
             // Driver picker (only when the app supplied an alternate engine):
             // the same conversation continues across both drivers — the
             // history is app-owned (D12), so it replays into either.
@@ -216,7 +237,8 @@ public struct AIPlaygroundView: View {
                     events = await orchestrator.streamDetailed(
                         to: text,
                         instructions: instructions,
-                        history: history
+                        history: history,
+                        need: need
                     )
                 }
                 for try await event in events {
