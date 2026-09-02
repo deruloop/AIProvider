@@ -316,6 +316,8 @@ await kit.streamResponse(to:instructions:history:) -> AsyncThrowingStream<String
 await kit.streamDetailed(to:instructions:history:) -> AsyncThrowingStream<AIStreamEvent, Error> // + provenance
 try await kit.resolveProvider() -> any ModelProvider            // the primitive (D9)
 try await kit.preferred() -> any LanguageModel     // iOS 27: Dynamic Profiles bridge (D1)
+FoundationModelsTranscript.entries(instructions:history:) -> [Transcript.Entry]  // ChatTurn → native transcript (D12↔profile glue)
+struct PlaygroundEngine { label, footnote, stream }  // VoltaSDKUI: app-supplied playground driver (D1)
 await kit.contextUsage(instructions:history:) -> ContextUsage?  // window pressure (D13)
 await kit.availableProviders() -> [ProviderIdentifier]
 await kit.providerStatuses() -> [ProviderStatus]                // for UI

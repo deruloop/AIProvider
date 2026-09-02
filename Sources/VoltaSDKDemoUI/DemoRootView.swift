@@ -280,11 +280,6 @@ public struct DemoRootView: View {
             Section {
                 ProviderStatusList(orchestrator: orchestrator)
             }
-            // The Dynamic Profiles bridge (D1): a native profile fed by the
-            // chain's resolved model. iOS 27 machinery — absent on 26.
-            if #available(iOS 27.0, macOS 27.0, *) {
-                ProfileBridgeSection(orchestrator: orchestrator)
-            }
         }
         .formStyle(.grouped)
         .scrollDismissesKeyboard(.interactively)
@@ -301,6 +296,13 @@ public struct DemoRootView: View {
 
     // MARK: User side
 
+    /// The playground's alternate driver (iOS 27): a native Dynamic Profile
+    /// fed by `preferred()`. `nil` on iOS 26 — the picker simply never shows.
+    private var profileEngine: PlaygroundEngine? {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return nil }
+        return ProfileEngine.make(orchestrator: orchestrator)
+    }
+
     private var userPane: some View {
         VStack(spacing: 12) {
             // The chat, gated on a committed selection (`selection == nil` =
@@ -309,7 +311,8 @@ public struct DemoRootView: View {
             AIPlaygroundView(
                 orchestrator: orchestrator,
                 instructions: nil,
-                placeholder: "Try a prompt (e.g. \"Plan a weekend in Rome\")"
+                placeholder: "Try a prompt (e.g. \"Plan a weekend in Rome\")",
+                alternateEngine: profileEngine
             )
             .disabled(userSelection == nil)
             .opacity(userSelection == nil ? 0.5 : 1)

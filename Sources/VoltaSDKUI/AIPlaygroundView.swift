@@ -23,6 +23,40 @@ public struct PlaygroundExchange: Identifiable, Sendable {
     public var response: AIResponse
 }
 
+/// An app-supplied alternate driver for the playground (D1): the app decides
+/// what answers — e.g. a native Dynamic Profile session fed by
+/// `orchestrator.preferred()` on iOS 27 — and the playground renders its
+/// events exactly like the built-in chain's. When present, a driver picker
+/// appears and the SAME conversation continues across both drivers: the
+/// history is app-owned (D12), so it replays into either engine.
+public struct PlaygroundEngine: Sendable {
+    /// Segment title in the driver picker (e.g. "Dynamic Profile").
+    public var label: String
+    /// Optional caption shown while this engine is selected.
+    public var footnote: String?
+    /// Streams a reply for the prompt + app-owned history, in the same
+    /// event vocabulary as `AIOrchestrator.streamDetailed`.
+    public var stream: @Sendable (
+        _ prompt: String,
+        _ instructions: String?,
+        _ history: [ChatTurn]
+    ) -> AsyncThrowingStream<AIStreamEvent, Error>
+
+    public init(
+        label: String,
+        footnote: String? = nil,
+        stream: @escaping @Sendable (
+            _ prompt: String,
+            _ instructions: String?,
+            _ history: [ChatTurn]
+        ) -> AsyncThrowingStream<AIStreamEvent, Error>
+    ) {
+        self.label = label
+        self.footnote = footnote
+        self.stream = stream
+    }
+}
+
 /// Minimal playground the developer can use as-is or as a reference for
 /// their own UI (all the logic goes through `streamDetailed`: fragments
 /// render as they arrive, and provenance comes from the `.began` event).
@@ -30,21 +64,25 @@ public struct AIPlaygroundView: View {
     private let orchestrator: AIOrchestrator
     private let instructions: String?
     private let placeholder: String
+    private let alternateEngine: PlaygroundEngine?
 
     @State private var prompt = ""
     @State private var exchanges: [PlaygroundExchange] = []
     @State private var errorText: String?
     @State private var isLoading = false
     @State private var contextUsage: ContextUsage?
+    @State private var usesAlternateEngine = false
 
     public init(
         orchestrator: AIOrchestrator,
         instructions: String? = nil,
-        placeholder: String = "Write a prompt…"
+        placeholder: String = "Write a prompt…",
+        alternateEngine: PlaygroundEngine? = nil
     ) {
         self.orchestrator = orchestrator
         self.instructions = instructions
         self.placeholder = placeholder
+        self.alternateEngine = alternateEngine
     }
 
     /// The history that will travel with the next turn ("developer" role).
@@ -117,6 +155,24 @@ public struct AIPlaygroundView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            // Driver picker (only when the app supplied an alternate engine):
+            // the same conversation continues across both drivers — the
+            // history is app-owned (D12), so it replays into either.
+            if let alternateEngine {
+                Picker("Driver", selection: $usesAlternateEngine) {
+                    Text("VoltaSDK chain").tag(false)
+                    Text(alternateEngine.label).tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                if usesAlternateEngine, let footnote = alternateEngine.footnote {
+                    Text(footnote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
             HStack(spacing: 8) {
                 TextField(placeholder, text: $prompt, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -153,11 +209,17 @@ public struct AIPlaygroundView: View {
             var privacy: PrivacyLevel?
             var streamed = ""
             do {
-                for try await event in await orchestrator.streamDetailed(
-                    to: text,
-                    instructions: instructions,
-                    history: history
-                ) {
+                let events: AsyncThrowingStream<AIStreamEvent, Error>
+                if usesAlternateEngine, let alternateEngine {
+                    events = alternateEngine.stream(text, instructions, history)
+                } else {
+                    events = await orchestrator.streamDetailed(
+                        to: text,
+                        instructions: instructions,
+                        history: history
+                    )
+                }
+                for try await event in events {
                     switch event {
                     case .began(let id, let level):
                         provider = id

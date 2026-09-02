@@ -11,13 +11,20 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
-- **Demo: a native Dynamic Profile fed by the chain.** New "Dynamic Profile
-  (iOS 27)" section in the demo UI (`ProfileBridgeSection`): a
-  `LanguageModelSession.Profile` declared entirely in Apple's API
-  (`Instructions`, `.temperature`) whose `.model(...)` is
-  `orchestrator.preferred()` — resolved per run (D7), answer streamed via the
-  profile's session. Documents two Swift 6 findings: `preferred()` is async
-  vs. synchronous profile modifiers (resolve-then-declare), and the session's
+- **One chat, two drivers: the playground demos both consumption modes.**
+  `AIPlaygroundView` gains an optional app-supplied **`PlaygroundEngine`**
+  (label + footnote + a `streamDetailed`-shaped stream closure): when
+  present, a driver picker appears and the SAME conversation continues
+  across drivers — the history is app-owned (D12), so it replays into
+  either engine. The demo supplies `ProfileEngine` (iOS 27): a native
+  `LanguageModelSession.Profile` declared entirely in Apple's API whose
+  `.model(...)` is `orchestrator.preferred()`, re-resolved per turn (D7),
+  with the history replayed through `LanguageModelSession(profile:history:)`.
+  To make that replay possible for any adopter,
+  **`FoundationModelsTranscript.entries(instructions:history:)` is now
+  public** — the `[ChatTurn]` → `[Transcript.Entry]` glue between the two
+  modes. Documents two Swift 6 findings: `preferred()` is async vs.
+  synchronous profile modifiers (resolve-then-declare), and the session's
   `sending profile:` parameter rejects profiles declared in `@MainActor`
   context (isolation inheritance — built in a `nonisolated` helper).
 - **Dynamic Profiles bridge (D1): `preferred()`.** New

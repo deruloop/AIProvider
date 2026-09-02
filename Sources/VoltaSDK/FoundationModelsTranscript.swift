@@ -11,14 +11,22 @@
 //  model always sees the conversation exactly the same way, regardless of
 //  which Apple backend answers.
 //
+//  PUBLIC because it is also the app-side glue between the two consumption
+//  modes (D1/D12): an app that keeps a `[ChatTurn]` history for the
+//  orchestrator can replay the same conversation into a native Dynamic
+//  Profile via `LanguageModelSession(profile:history: entries(...))`.
+//
 
 import Foundation
 import FoundationModels
 
-enum FoundationModelsTranscript {
+public enum FoundationModelsTranscript {
 
-    /// Maps instructions + history (D12) into native `Transcript` entries.
-    static func entries(
+    /// Maps instructions + history (D12) into native `Transcript` entries —
+    /// usable as the `history:` of a `LanguageModelSession`, including one
+    /// built from a Dynamic Profile (pass `instructions: nil` there: the
+    /// profile owns its own instructions).
+    public static func entries(
         instructions: String?,
         history: [ChatTurn]
     ) -> [Transcript.Entry] {

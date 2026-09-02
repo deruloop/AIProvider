@@ -210,13 +210,24 @@ Next steps, in order:
    the `.swiftinterface` and recorded in `docs/iOS27-Design.md` §8 (Profile
    leaf + `Instructions` + full modifier list + `SessionProperty` +
    `LanguageModelSession(profile:history:)` — the `history:` slot is D12's
-   entry point). Demo ships `ProfileBridgeSection`: a native profile whose
-   `.model(...)` is `preferred()`, streamed through the profile's session.
-   Two Swift 6 findings recorded (resolve-then-declare — `preferred()` is
-   async, modifiers aren't; `sending profile:` rejects @MainActor-declared
-   profiles → nonisolated helper). LIVE VALIDATION PENDING: run macOSDemo,
-   ask the profile, confirm the resolved model answers (on-device/PCC/
-   connected account) — that run is Part 3's proof beat.
+   entry point). **Demo design settled (Sep 2026): ONE chat, TWO drivers** —
+   the earlier standalone `ProfileBridgeSection` was replaced by a driver
+   picker in the playground ("VoltaSDK chain" | "Dynamic Profile").
+   `AIPlaygroundView` gained an optional app-supplied `PlaygroundEngine`
+   (label + footnote + a `streamDetailed`-shaped closure); the demo's
+   `ProfileEngine` builds a native profile per turn (`preferred()`
+   re-resolved, D7) and replays the app-owned history into
+   `LanguageModelSession(profile:history:)` via the now-PUBLIC
+   `FoundationModelsTranscript.entries` (the D12↔profile glue). The same
+   conversation survives switching drivers mid-thread — the demo proves the
+   bridge AND transcript portability in one gesture, and the footnote states
+   the honest trade (no mid-turn fallback under Apple's driver). Two Swift 6
+   findings recorded (resolve-then-declare — `preferred()` is async,
+   modifiers aren't; `sending profile:` rejects @MainActor-declared profiles
+   → nonisolated helper). LIVE VALIDATION PENDING: run macOSDemo, converse
+   on the chain driver, flip to "Dynamic Profile" mid-conversation, confirm
+   the thread continues on the resolved model — that run is Part 3's proof
+   beat.
 3. **Per-need fallback chain** (`.lightweight/.reasoning/.largeContext`),
    keeping `ModelPreference` at 4 cases (a third tier makes the closed enum
    combinatorial).
