@@ -227,7 +227,12 @@ Next steps, in order:
    → nonisolated helper). LIVE VALIDATION PENDING: run macOSDemo, converse
    on the chain driver, flip to "Dynamic Profile" mid-conversation, confirm
    the thread continues on the resolved model — that run is Part 3's proof
-   beat.
+   beat. **Article (Part 3) DRAFTED (Sep 2026):**
+   `docs/articles/feeding-dynamic-profiles.md` (git-excluded) — follows
+   session 242; opens on Apple's sample reading models off an object named
+   `orchestrator`; structure per the series (announced/changed/problems/
+   limits). The live-validation sentence is deliberately NOT yet written —
+   add it after the user's driver-switch run, like Part 2's "It answered".
 3. ~~Per-need fallback chain~~ ✅ (D7, Sep 2026) — see roadmap item 7 for
    the full record; `ModelPreference` kept at 4 cases as planned. Bundled:
    D18 (`.log` disclosure default).
