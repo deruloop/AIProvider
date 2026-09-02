@@ -247,12 +247,14 @@ Next steps, in order:
    `quotaUsage` read fine *without* the entitlement, but the first `respond`
    traps if it's absent — hence the provider's `SecTask` self-gate.
 
-Design decision already recorded under D7 in `docs/iOS27-Design.md`:
-**`.largeContext` is REACTIVE, not preemptive** — it reorders the chain to
-favour large-window providers but does NOT hard-route to cloud; on-device still
-answers any call that actually fits, and the handoff fires only when the token
-pre-flight shows real overflow. Privacy crossings stay driven by measured
-overflow, never inferred from the need.
+Design decision recorded under D7 in `docs/iOS27-Design.md`, **amended
+Sep 2026 (user decision):** `.largeContext` ranks on-device LAST (Apple cloud
+→ external, window-sorted; on-device only as the final fallback) — its
+consistency isn't trusted for long-context work. The reactive half survives:
+the D13 pre-flight still skips any window the measured call exceeds. The
+June "a hint must never cause a privacy crossing" rule is knowingly relaxed
+for this one need (crossing is to `.appleCloud` first while PCC is
+available); D18's logging makes any further crossing visible.
 
 ## 4. Core principles (one-liners; full rationale in the linked docs)
 
@@ -325,13 +327,15 @@ overflow, never inferred from the need.
    suites): public `ModelNeed` (`.lightweight/.reasoning/.largeContext`) as a
    `need:` parameter on respond/stream/resolve/`preferred(_:)` — a per-call
    hint that REORDERS the chain (stable sort by privacy-level tier:
-   lightweight = onDevice→appleCloud→external; reasoning =
-   appleCloud→external→onDevice; largeContext keeps the privacy-first order,
-   sorts within-tier by known window size, and stays REACTIVE per D7 — the
-   D13 pre-flight does the routing, verified by test). `ModelPreference`
-   stays at 4 cases. Bundled D18: `PrivacyDisclosure.log` (unified log,
-   subsystem "VoltaSDK") is the new DEFAULT — silent fallback was criticism
-   4 of the Sep 2026 self-audit.
+   lightweight = onDevice→appleCloud→external; reasoning AND largeContext =
+   appleCloud→external→onDevice — **largeContext amended Sep 2026, user
+   decision: on-device LAST**, its consistency isn't trusted for long-context
+   work; window-sorted within tiers; the D13 pre-flight still guards every
+   window reactively — verified by test). `ModelPreference` stays at 4
+   cases. `providerStatuses(for: need)` previews the reordered chain (shown
+   live in the playground under the need picker). Bundled D18:
+   `PrivacyDisclosure.log` (unified log, subsystem "VoltaSDK") is the new
+   DEFAULT — silent fallback was criticism 4 of the Sep 2026 self-audit.
 8. ~~`preferred()` bridge~~ ✅ (Aug 2026, xcode27): returns the resolved
    provider's native `any LanguageModel` via the public
    `LanguageModelConvertible` capability (all five built-ins adopt it);
@@ -349,3 +353,18 @@ overflow, never inferred from the need.
 10. **Fetch model lists from vendor APIs** (OpenAI/Anthropic `GET /v1/models`,
     Gemini `ListModels`): once a key is entered, populate a model picker for
     the developer instead of a free-text field. Complements D15.
+11. **Evaluations framework (user decision, Sep 2026 — the next build after
+    the Part 3 article).** Apple's WWDC 2026 Evaluations framework, three
+    sessions: 298 "Meet the Evaluations framework" (probabilistic testing,
+    metrics, evaluators, Swift Testing integration), 299 "Create robust
+    evaluations for agentic apps" (`makeSamples` synthetic data,
+    `TrajectoryExpectation`, `ToolCallEvaluator`), 335 "Improve your prompts
+    by hill-climbing" (iterative refinement, judge-to-human drift via
+    Cohen's kappa). Why it's OURS to build: the chain's promises are
+    currently unmeasured — parity on fallback (open questions Q12/Q13:
+    does quality hold when the answer silently moves providers?), and the
+    D7-amendment doubt itself (is on-device *actually* unreliable at long
+    context, and where's the threshold?). Evals turn both from beliefs into
+    numbers, per provider, per need — potentially even informing chain
+    ordering with measured data instead of tier heuristics. Likely Part 4
+    of the article series.

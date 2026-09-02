@@ -15,13 +15,16 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
   (`respond`/`respondDetailed`/`streamResponse`/`streamDetailed`/
   `resolveProvider`/`preferred`) gains a per-call `need:` hint —
   `.lightweight` (on-device → PCC → external), `.reasoning` (PCC → external
-  → on-device), `.largeContext` (privacy-first order kept; within each tier
-  larger known context windows rank first; REACTIVE by design — the D13
-  pre-flight decides the actual crossing, so a call that fits on-device
-  stays on-device). A need reorders the chain for one call, never replaces
+  → on-device), `.largeContext` (PCC → external with larger known windows
+  first, on-device LAST — long-context work shouldn't lean on the small
+  on-device model; the D13 pre-flight still skips any window the measured
+  call exceeds). A need reorders the chain for one call, never replaces
   it; ties keep the configured order; `ModelPreference` stays at 4 cases.
   The D1 flagship is now real syntax:
-  `.model(orchestrator.preferred(.reasoning))`.
+  `.model(orchestrator.preferred(.reasoning))`. `providerStatuses` gains a
+  `for need:` parameter — the chain in the order that need would walk it —
+  and the playground shows that preview live under its need picker
+  (unavailable providers in parentheses).
 - **Privacy downgrades are logged by default (D18).** New
   `PrivacyDisclosure.log` case — downgrades are recorded to the unified log
   (subsystem "VoltaSDK", category "privacy") — and it replaces `.silent` as

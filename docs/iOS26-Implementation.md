@@ -368,7 +368,7 @@ FoundationModelsTranscript.entries(instructions:history:) -> [Transcript.Entry] 
 struct PlaygroundEngine { label, footnote, stream }  // VoltaSDKUI: app-supplied playground driver (D1)
 await kit.contextUsage(instructions:history:) -> ContextUsage?  // window pressure (D13)
 await kit.availableProviders() -> [ProviderIdentifier]
-await kit.providerStatuses() -> [ProviderStatus]                // for UI
+await kit.providerStatuses(for: need) -> [ProviderStatus]       // for UI; need previews D7 order
 
 // extension points
 protocol ModelProvider { identifier; privacyLevel; availability(); respond(to:instructions:history:);

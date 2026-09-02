@@ -86,6 +86,18 @@ consistent with "explicit beats inferred for privacy". (Possible future opt-in:
 a stricter mode that skips the on-device pre-flight when a developer *knows*
 inputs are always huge — explicit, never the default.)
 
+**Amendment (Sep 2026, user decision — supersedes the on-device-first part
+above):** `.largeContext` now ranks **on-device LAST** (Apple cloud →
+external, window-sorted within tiers, on-device as the final fallback).
+Rationale: the small on-device model's consistency/reliability isn't trusted
+for long-context work, even for calls that would fit its window. Trade-off
+accepted knowingly: the hint now moves work off-device by itself (to the
+`.appleCloud` tier first — still Apple, still no third party while PCC is
+available), a departure from June's "a hint must never cause a privacy
+crossing". What stays reactive: the D13 pre-flight still skips any provider
+whose window the *measured* call exceeds, so ordering never sends a call
+somewhere it can't fit.
+
 ### D14 — One package, three capability tiers — not three SDKs
 - **Tier 26.0 (base):** fallback + privacy + transcript transparency; context
   handling reactive only.

@@ -33,11 +33,12 @@ public enum ModelNeed: Sendable, Hashable {
     /// Favour capable models: PCC (the reasoning-capable free tier) →
     /// external → on-device as the last resort.
     case reasoning
-    /// Favour room — REACTIVELY (D7): the privacy-first order is kept, but
-    /// within each tier providers with larger known context windows rank
-    /// first, and the D13 pre-flight does the real routing. A call that
-    /// actually fits on-device still runs on-device; the crossing to a
-    /// bigger window happens only on measured overflow, never on the hint.
+    /// Favour room AND reliability: Apple cloud → external — each tier
+    /// sorted by known context window — with on-device LAST (D7 amendment,
+    /// Sep 2026: long-context work shouldn't lean on the small on-device
+    /// model's consistency; it stays reachable as the final fallback). The
+    /// D13 pre-flight still guards every window reactively: a provider whose
+    /// window the measured call exceeds is skipped, hint or no hint.
     case largeContext
 }
 
@@ -685,10 +686,12 @@ public actor AIOrchestrator {
     }
 
     /// Full status of every provider in the chain (including unavailable
-    /// ones, with the reason). Designed for picker/diagnostic UIs.
-    public func providerStatuses() async -> [ProviderStatus] {
+    /// ones, with the reason). Designed for picker/diagnostic UIs. Pass a
+    /// `need` to see the chain in the order that need would walk it (D7) —
+    /// the "what would happen" preview counterpart of `respond(need:)`.
+    public func providerStatuses(for need: ModelNeed? = nil) async -> [ProviderStatus] {
         var result: [ProviderStatus] = []
-        for provider in orderedProviders {
+        for provider in orderedProviders(for: need) {
             result.append(ProviderStatus(
                 identifier: provider.identifier,
                 privacyLevel: provider.privacyLevel,
@@ -712,16 +715,18 @@ public actor AIOrchestrator {
 
         func tierRank(_ provider: any ModelProvider) -> Int {
             switch need {
-            case .lightweight, .largeContext:
+            case .lightweight:
                 // Cost/privacy order: local → Apple cloud → external.
                 switch provider.privacyLevel {
                 case .onDevice: return 0
                 case .appleCloud: return 1
                 case .external: return 2
                 }
-            case .reasoning:
-                // Capability order: PCC (reasoning-capable, free) → external
-                // (big models) → on-device as the last resort.
+            case .reasoning, .largeContext:
+                // Capability order: PCC (capable, free) → external (big
+                // models) → on-device as the last resort. For .largeContext
+                // this is the Sep 2026 D7 amendment: reliability over
+                // keeping long-context work local.
                 switch provider.privacyLevel {
                 case .appleCloud: return 0
                 case .external: return 1

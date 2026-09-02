@@ -1237,19 +1237,25 @@ struct ModelNeedTests {
         #expect(try await noPCC.respond(to: "hi", need: .reasoning) == "external")
     }
 
-    @Test(".largeContext stays reactive: a call that fits still runs on-device")
-    func largeContextIsReactive() async throws {
+    @Test(".largeContext leads with Apple cloud; on-device is the last resort")
+    func largeContextAvoidsOnDevice() async throws {
+        // D7 amendment (Sep 2026): long-context work shouldn't lean on the
+        // small on-device model, even for calls that would fit it.
         let kit = AIOrchestrator(providers: chain())
-        // 10 tokens fits the 4K on-device window → no crossing (D7).
-        #expect(try await kit.respond(to: "hi", need: .largeContext) == "on-device")
+        #expect(try await kit.respond(to: "hi", need: .largeContext) == "apple-cloud")
+
+        // …but on-device remains reachable when nothing else is available.
+        let onlyLocal = AIOrchestrator(providers: [
+            MockProvider(identifier: .onDevice, privacyLevel: .onDevice,
+                         outcome: .success("on-device"))
+        ])
+        #expect(try await onlyLocal.respond(to: "hi", need: .largeContext) == "on-device")
     }
 
-    @Test(".largeContext crosses on measured overflow, to the biggest window")
-    func largeContextCrossesOnOverflow() async throws {
+    @Test(".largeContext ranks larger windows first and pre-flight still guards")
+    func largeContextWindowOrder() async throws {
         let kit = AIOrchestrator(
             providers: [
-                MockProvider(identifier: .onDevice, privacyLevel: .onDevice,
-                             outcome: .success("on-device"), contextSize: 4_096, tokenCount: 8_000),
                 MockProvider(identifier: .anthropic, privacyLevel: .external,
                              outcome: .success("small-cloud"), contextSize: 200_000, tokenCount: 8_000),
                 MockProvider(identifier: .gemini, privacyLevel: .external,
@@ -1257,9 +1263,30 @@ struct ModelNeedTests {
             ],
             responseTokenReserve: 0
         )
-        // Overflows on-device (pre-flight skips it, D13); within the external
-        // tier the larger window ranks first.
+        // Within the external tier the larger window ranks first.
         #expect(try await kit.respond(to: "hi", need: .largeContext) == "big-cloud")
+
+        // And the D13 pre-flight still skips a window the call exceeds,
+        // whatever the ordering says: 300K tokens overflow the 200K window.
+        let overflowing = AIOrchestrator(
+            providers: [
+                MockProvider(identifier: .anthropic, privacyLevel: .external,
+                             outcome: .success("small-cloud"), contextSize: 200_000, tokenCount: 300_000),
+                MockProvider(identifier: .gemini, privacyLevel: .external,
+                             outcome: .success("big-cloud"), contextSize: 1_000_000, tokenCount: 300_000)
+            ],
+            responseTokenReserve: 0
+        )
+        #expect(try await overflowing.respond(to: "hi", need: .largeContext) == "big-cloud")
+    }
+
+    @Test("providerStatuses(for:) previews the need-reordered chain")
+    func statusesPreviewNeedOrder() async throws {
+        let kit = AIOrchestrator(providers: chain())
+        let reasoning = await kit.providerStatuses(for: .reasoning)
+        #expect(reasoning.map(\.identifier) == [.privateCloudCompute, .openAI, .onDevice])
+        let auto = await kit.providerStatuses()
+        #expect(auto.map(\.identifier) == [.openAI, .privateCloudCompute, .onDevice])
     }
 
     @Test("Streaming honours the need")

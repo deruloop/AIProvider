@@ -74,6 +74,10 @@ public struct AIPlaygroundView: View {
     @State private var usesAlternateEngine = false
     /// Per-call need (D7) applied to the next message on the chain driver.
     @State private var need: ModelNeed?
+    /// Live preview of the chain order the current need would walk (D7):
+    /// phase 1 of the resolution, visible before sending. Unavailable
+    /// providers appear in parentheses — phase 2 will skip them.
+    @State private var chainPreview = ""
 
     public init(
         orchestrator: AIOrchestrator,
@@ -94,7 +98,21 @@ public struct AIPlaygroundView: View {
         }
     }
 
+    /// Identity for the chain-preview task: recompute when the need or the
+    /// orchestrator instance changes.
+    private struct PreviewKey: Hashable {
+        let need: ModelNeed?
+        let orchestrator: ObjectIdentifier
+    }
+
     public var body: some View {
+        content
+            .task(id: PreviewKey(need: need, orchestrator: ObjectIdentifier(orchestrator))) {
+                await refreshChainPreview()
+            }
+    }
+
+    private var content: some View {
         VStack(spacing: 8) {
             HStack {
                 Text("Conversation (\(exchanges.count) turns)")
@@ -176,6 +194,13 @@ public struct AIPlaygroundView: View {
             .disabled(usesAlternateEngine)
             .opacity(usesAlternateEngine ? 0.5 : 1)
 
+            if !chainPreview.isEmpty, !usesAlternateEngine {
+                Text("Chain: \(chainPreview)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             // Driver picker (only when the app supplied an alternate engine):
             // the same conversation continues across both drivers — the
             // history is app-owned (D12), so it replays into either.
@@ -212,6 +237,20 @@ public struct AIPlaygroundView: View {
                 .keyboardShortcut(.defaultAction)
             }
         }
+    }
+
+    /// Recomputed when the need or the orchestrator changes, and after each
+    /// exchange (availability can shift between turns — quota, keys).
+    private func refreshChainPreview() async {
+        let statuses = await orchestrator.providerStatuses(for: need)
+        chainPreview = statuses
+            .map { status in
+                if case .available = status.availability {
+                    return status.identifier.rawValue
+                }
+                return "(\(status.identifier.rawValue))"
+            }
+            .joined(separator: " → ")
     }
 
     private func send() {
@@ -271,6 +310,7 @@ public struct AIPlaygroundView: View {
                 errorText = error.localizedDescription
             }
             isLoading = false
+            await refreshChainPreview()   // availability may have shifted
         }
     }
 
