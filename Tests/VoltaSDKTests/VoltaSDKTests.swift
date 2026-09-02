@@ -1151,3 +1151,50 @@ struct PreferredBridgeTests {
         #expect(thrown == .noProviderAvailable)
     }
 }
+
+// MARK: - Warm-session reuse (D17)
+
+@Suite("Warm-session reuse (D17)")
+struct SessionCacheTests {
+
+    @Test("Hit only when the conversation continues exactly")
+    func hitOnExactContinuation() {
+        let cache = SessionCache()
+        let session = LanguageModelSession()
+        let conversation: [ChatTurn] = [.user("q"), .assistant("a")]
+
+        cache.checkIn(session, instructions: "sys", history: conversation)
+        #expect(cache.checkOut(instructions: "sys", history: conversation) === session)
+    }
+
+    @Test("Check-out is exclusive: a second caller builds fresh")
+    func checkOutIsExclusive() {
+        let cache = SessionCache()
+        let session = LanguageModelSession()
+        cache.checkIn(session, instructions: nil, history: [])
+
+        #expect(cache.checkOut(instructions: nil, history: []) === session)
+        #expect(cache.checkOut(instructions: nil, history: []) == nil)
+    }
+
+    @Test("A diverging history is a miss AND discards the stale entry")
+    func divergenceInvalidates() {
+        let cache = SessionCache()
+        let session = LanguageModelSession()
+        cache.checkIn(session, instructions: nil, history: [.user("q"), .assistant("a")])
+
+        // The app trimmed its history → not a continuation → miss…
+        #expect(cache.checkOut(instructions: nil, history: [.user("q")]) == nil)
+        // …and the stale session must be gone, not resurrected later.
+        #expect(cache.checkOut(instructions: nil, history: [.user("q"), .assistant("a")]) == nil)
+    }
+
+    @Test("Different instructions are a different conversation")
+    func instructionsAreCompared() {
+        let cache = SessionCache()
+        let session = LanguageModelSession()
+        cache.checkIn(session, instructions: "be brief", history: [])
+
+        #expect(cache.checkOut(instructions: "be verbose", history: []) == nil)
+    }
+}

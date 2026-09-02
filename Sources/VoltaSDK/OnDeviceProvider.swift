@@ -14,6 +14,11 @@ public struct OnDeviceProvider: ModelProvider {
     public let identifier = ProviderIdentifier.onDevice
     public let privacyLevel = PrivacyLevel.onDevice
 
+    /// Warm-session reuse (D17): copies of this provider value share the one
+    /// cache, so consecutive turns of the same conversation skip re-processing
+    /// the whole prefix.
+    private let sessionCache = SessionCache()
+
     public init() {}
 
     public func availability() async -> ProviderAvailability {
@@ -32,13 +37,21 @@ public struct OnDeviceProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
-        // A session is created per call (stateless, D12): the conversation
-        // history comes from the app and is rebuilt as a native Foundation
-        // Models Transcript.
-        let session = Self.makeSession(instructions: instructions, history: history)
+        // Warm-session reuse (D17): when the call continues exactly the
+        // conversation the cached session absorbed, only the new prompt is
+        // processed. Otherwise the session is rebuilt from the app-supplied
+        // history (stateless semantics, D12 — the cache verifies, never
+        // assumes).
+        let session = sessionCache.checkOut(instructions: instructions, history: history)
+            ?? Self.makeSession(instructions: instructions, history: history)
 
         do {
             let response = try await session.respond(to: prompt)
+            sessionCache.checkIn(
+                session,
+                instructions: instructions,
+                history: history + [.user(prompt), .assistant(response.content)]
+            )
             return response.content
         } catch let error as LanguageModelSession.GenerationError {
             throw Self.map(error)
@@ -60,6 +73,9 @@ public struct OnDeviceProvider: ModelProvider {
     ) -> AsyncThrowingStream<String, Error> {
         SessionStreaming.stream(
             prompt: prompt,
+            instructions: instructions,
+            history: history,
+            cache: sessionCache,
             makeSession: { Self.makeSession(instructions: instructions, history: history) },
             mapError: { error in
                 if let generation = error as? LanguageModelSession.GenerationError {

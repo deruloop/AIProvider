@@ -29,23 +29,34 @@ File map:
 ├── docs/                                  // internal sources (this file & co.)
 ├── Sources/
 │   ├── VoltaSDK/                          // CORE — no UI dependency, ever
-│   │   ├── ModelProvider.swift            // protocol + identifiers + statuses + typed errors
+│   │   ├── ModelProvider.swift            // protocol + identifiers + statuses + typed errors (D13/D16 capabilities)
 │   │   ├── ChatTurn.swift                 // app-supplied conversation turn (D12)
 │   │   ├── PrivacyDisclosure.swift        // downgrade event + disclosure policy
 │   │   ├── CloudVendor.swift              // vendor detection + defaults + doc links (D15)
 │   │   ├── OnDeviceProvider.swift         // wraps SystemLanguageModel, maps GenerationError
-│   │   ├── OpenAIProvider.swift           // Chat Completions (Codable, typed errors)
-│   │   ├── AnthropicProvider.swift        // Claude Messages API (x-api-key, no temperature)
-│   │   ├── GeminiProvider.swift           // Gemini generateContent (x-goog-api-key)
-│   │   ├── AIOrchestrator.swift           // orchestrator + config + fallback + resolution
+│   │   ├── OpenAIProvider.swift           // Chat Completions (Codable, typed errors, SSE streaming)
+│   │   ├── AnthropicProvider.swift        // Claude Messages API (x-api-key, no temperature, SSE streaming)
+│   │   ├── GeminiProvider.swift           // Gemini generateContent (dual transport, SSE streaming)
+│   │   ├── AIOrchestrator.swift           // orchestrator + config + fallback + resolution + streaming
+│   │   ├── ServerSentEvents.swift         // shared SSE parser (D16)
+│   │   ├── SessionStreaming.swift         // session snapshots → deltas for session-backed providers (D16)
+│   │   ├── SessionCache.swift             // warm-session reuse for session-backed providers (D17)
+│   │   ├── FoundationModelsTranscript.swift // ChatTurn ↔ native Transcript (public: the D12↔profile glue)
+│   │   ├── PrivateCloudComputeProvider.swift // PCC (iOS 27, D6/D14; SecTask entitlement gate)
+│   │   ├── CloudAccountLanguageModel.swift  // iOS 27 front door: vendor REST as LanguageModel+Executor
+│   │   ├── LanguageModelProvider.swift    // wraps any LanguageModel into the chain (iOS 27)
+│   │   ├── LanguageModelBridge.swift      // LanguageModelConvertible + preferred() conformances (D1, iOS 27)
+│   │   ├── ProviderError+LanguageModel.swift // shared LanguageModelError → ProviderError mapping
 │   │   └── Mocks.swift                    // MockProvider (public, for adopters' tests too)
+│   ├── VoltaSDKAuth/                      // OPT-IN OAuth machinery (PKCE, Keychain, refresh) — not in core
 │   ├── VoltaSDKUI/                        // OPTIONAL SwiftUI components (separate product)
 │   │   ├── PrivacyLevelBadge.swift        // badge for a PrivacyLevel
 │   │   ├── ProviderStatusList.swift       // fallback-chain status list (+ public Row)
 │   │   ├── ModelSelector.swift            // USER-side collapsed picker + onSelection hook (+ public Row)
-│   │   └── AIPlaygroundView.swift         // conversational playground with provenance
+│   │   └── AIPlaygroundView.swift         // playground with provenance + optional PlaygroundEngine driver
 │   └── VoltaSDKDemoUI/                    // demo UI shared macOS+iOS (adaptive layout)
-│       └── DemoRootView.swift             // HSplitView on macOS, TabView on iOS
+│       ├── DemoRootView.swift             // HSplitView on macOS, TabView on iOS
+│       └── ProfileEngine.swift            // iOS 27: native Dynamic Profile as the playground's 2nd driver
 ├── Examples/iOSDemo/                      // iPhone/iPad demo app (Xcode project)
 │   ├── project.yml                        // XcodeGen spec (carries DEVELOPMENT_TEAM)
 │   ├── iOSDemo.xcodeproj
@@ -297,6 +308,28 @@ HTTP ones (Anthropic `overloaded_error` → transient network, `rate_limit_error
 → `.rateLimited`); on iOS 27 the `CloudAccountLanguageModel` executor forwards
 the same fragments into Apple's generation channel, closing the
 "single-fragment executor" gap from session 339.
+
+### D17 — Warm-session reuse: verify the continuation, never assume it
+Rebuilding a session per call (the D12 discipline) re-processes the whole
+conversation prefix on every turn — a growing time-to-first-token tax on the
+session-backed providers (on-device, PCC, wrapped `LanguageModel`s; REST
+providers are untouched — HTTP chat APIs re-send history for everyone, so
+there is nothing to reuse). D17 removes the tax without touching D12's
+semantics: each session-backed provider holds a `SessionCache` with ONE warm
+session plus the exact conversation it has absorbed (instructions + history
++ every exchange completed since). A call reuses the warm session **iff its
+(instructions, history) equals that conversation exactly** — then only the
+new prompt is processed, matching a natively held Apple session. Any
+divergence (the app trimmed/edited history, new conversation, different
+instructions) is a miss: discard, rebuild from the app's history — the
+pre-D17 behaviour. The app still owns the history; the cache *verifies*
+continuation rather than assuming it, which is what keeps D12 honest.
+Bookkeeping: check-in only after a SUCCESSFUL, non-empty turn (an errored or
+mid-stream-failed session may hold an inconsistent transcript and is
+dropped); `checkOut` removes the entry, so concurrent calls can never share
+a session (the race loser builds fresh); a config change rebuilds providers
+→ cold caches. Scope: one session per provider — alternating between two
+conversations misses every time (no regression, just no benefit).
 
 ## 5. Public API that must stay stable
 

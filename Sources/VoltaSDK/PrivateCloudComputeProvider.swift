@@ -52,6 +52,9 @@ public struct PrivateCloudComputeProvider: ModelProvider {
     /// the model → the provider reports unavailable and the chain skips it.
     private let model: PrivateCloudComputeLanguageModel?
 
+    /// Warm-session reuse (D17) — see `SessionCache`.
+    private let sessionCache = SessionCache()
+
     public init() {
         self.model = Self.hasRequiredEntitlement() ? PrivateCloudComputeLanguageModel() : nil
     }
@@ -104,15 +107,19 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         // direct caller must not trap either.)
         guard let model else { throw ProviderError.noProviderAvailable }
 
-        // Stateless per call (D12): the app-supplied history is rebuilt as a
-        // native Transcript so PCC sees the conversation as its own — the same
+        // Warm-session reuse (D17), else rebuilt from the app-supplied
+        // history (D12) so PCC sees the conversation as its own — the same
         // shape the on-device provider uses.
-        let session = Self.makeSession(
-            model: model, instructions: instructions, history: history
-        )
+        let session = sessionCache.checkOut(instructions: instructions, history: history)
+            ?? Self.makeSession(model: model, instructions: instructions, history: history)
 
         do {
             let response = try await session.respond(to: prompt)
+            sessionCache.checkIn(
+                session,
+                instructions: instructions,
+                history: history + [.user(prompt), .assistant(response.content)]
+            )
             return response.content
         } catch let error as PrivateCloudComputeLanguageModel.Error {
             throw Self.map(error)
@@ -138,6 +145,9 @@ public struct PrivateCloudComputeProvider: ModelProvider {
         guard let model else { return SessionStreaming.failing(.noProviderAvailable) }
         return SessionStreaming.stream(
             prompt: prompt,
+            instructions: instructions,
+            history: history,
+            cache: sessionCache,
             makeSession: { Self.makeSession(model: model, instructions: instructions, history: history) },
             mapError: { error in
                 if let pcc = error as? PrivateCloudComputeLanguageModel.Error {

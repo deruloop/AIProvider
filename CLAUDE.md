@@ -266,6 +266,7 @@ overflow, never inferred from the need.
 - **D14** One package, three capability tiers — expression-level gates for 26.4, type-level gates for 27. *(27 design)*
 - **D15** Vendor-agnostic developer key: OpenAI/Claude/Gemini in one slot, auto-detected; model name travels with the key. *(26 impl)*
 - **D16** Streaming as an optional capability; fallback only until the first fragment — visible text is never retracted. *(26 impl)*
+- **D17** Warm-session reuse: same provider + exact conversation continuation → reuse the session; verify, never assume. *(26 impl)*
 
 ## 5. Roadmap (ordered)
 
@@ -302,9 +303,15 @@ overflow, never inferred from the need.
    UNCOMMITTED local change — the committed project stays entitlement-free
    (opt-in policy); re-apply after any checkout/regenerate of the project.
 4. ~~Token/context awareness~~ ✅ (D13)
-5. ~~Multi-turn~~ ✅ (D12) — still open, lower priority: KV-cache/`Transcript`
-   reuse when the provider didn't change between turns; trimming hook pairs
-   with `contextUsage`.
+5. ~~Multi-turn~~ ✅ (D12); ~~session/KV reuse when the provider didn't
+   change~~ ✅ (D17, Sep 2026): session-backed providers each hold a
+   `SessionCache` — reuse iff (instructions, history) exactly equals the
+   conversation the warm session absorbed; miss = rebuild (pre-D17
+   behaviour); errored/empty turns never re-enter; checkOut is exclusive.
+   Removes the growing time-to-first-token tax vs a natively held Apple
+   session in the common case (provider stable); the replay at a real model
+   switch is unavoidable physics (no cross-model KV migration, Q6/Q7).
+   Still open, lower priority: a trimming hook paired with `contextUsage`.
 6. **iOS 27 providers** — PCC ✅ (xcode27, structural; runtime unverified);
    user-account Gemini/Claude next via the `LanguageModel`+`Executor` pattern
    (`docs/iOS27-Design.md` §6/§8). Was blocked; SDK now in hand.

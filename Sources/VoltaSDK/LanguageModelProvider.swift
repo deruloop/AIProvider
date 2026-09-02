@@ -38,6 +38,10 @@ struct LanguageModelProvider: ModelProvider {
     /// no generic availability notion, so the builder supplies it (for a
     /// user-account model: "is a key/token connected").
     private let connected: Bool
+    /// Warm-session reuse (D17) — see `SessionCache`. For REST-backed models
+    /// the wire cost is unchanged (HTTP chat APIs are stateless), but a
+    /// vendor package with real native state benefits fully.
+    private let sessionCache = SessionCache()
 
     init(
         identifier: ProviderIdentifier,
@@ -60,10 +64,17 @@ struct LanguageModelProvider: ModelProvider {
         instructions: String?,
         history: [ChatTurn]
     ) async throws -> String {
-        let session = makeSession(instructions: instructions, history: history)
+        // Warm-session reuse (D17), else rebuilt from app-supplied history (D12).
+        let session = sessionCache.checkOut(instructions: instructions, history: history)
+            ?? makeSession(instructions: instructions, history: history)
 
         do {
             let response = try await session.respond(to: prompt)
+            sessionCache.checkIn(
+                session,
+                instructions: instructions,
+                history: history + [.user(prompt), .assistant(response.content)]
+            )
             return response.content
         } catch let error as ProviderError {
             throw error                              // already our shape
@@ -92,6 +103,9 @@ struct LanguageModelProvider: ModelProvider {
         }
         return SessionStreaming.stream(
             prompt: prompt,
+            instructions: instructions,
+            history: history,
+            cache: sessionCache,
             makeSession: makeSession,
             mapError: { error in
                 if let provider = error as? ProviderError { return provider }

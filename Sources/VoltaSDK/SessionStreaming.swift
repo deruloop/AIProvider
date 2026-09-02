@@ -16,18 +16,24 @@ import Foundation
 import FoundationModels
 
 enum SessionStreaming {
-    /// Streams `prompt` through a session built by `makeSession`, converting
-    /// cumulative snapshots to text deltas. Errors pass through `mapError`
-    /// so each provider keeps its own native → `ProviderError` mapping.
+    /// Streams `prompt` through a session — the provider's warm one when the
+    /// conversation continues exactly (D17), otherwise a fresh one from
+    /// `makeSession` — converting cumulative snapshots to text deltas.
+    /// Errors pass through `mapError` so each provider keeps its own native
+    /// → `ProviderError` mapping; a failed stream never re-enters the cache.
     static func stream(
         prompt: String,
+        instructions: String?,
+        history: [ChatTurn],
+        cache: SessionCache?,
         makeSession: @escaping @Sendable () -> LanguageModelSession,
         mapError: @escaping @Sendable (any Error) -> any Error
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let session = makeSession()
+                    let session = cache?.checkOut(instructions: instructions, history: history)
+                        ?? makeSession()
                     var delivered = ""
                     for try await partial in session.streamResponse(to: prompt) {
                         let full = partial.content
@@ -40,6 +46,15 @@ enum SessionStreaming {
                         let delta = String(full.dropFirst(delivered.count))
                         delivered = full
                         continuation.yield(delta)
+                    }
+                    // Successful, non-empty turn → the session is warm for the
+                    // continuation the app will send next (D17).
+                    if !delivered.isEmpty {
+                        cache?.checkIn(
+                            session,
+                            instructions: instructions,
+                            history: history + [.user(prompt), .assistant(delivered)]
+                        )
                     }
                     continuation.finish()
                 } catch {

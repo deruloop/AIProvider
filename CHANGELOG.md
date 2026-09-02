@@ -11,6 +11,18 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
+- **Warm-session reuse (D17).** The session-backed providers (on-device,
+  PCC, wrapped `LanguageModel`s) now keep their last session warm: when the
+  next call continues exactly the same conversation (same instructions, same
+  app-supplied history including the last exchange), the session is reused
+  and only the new prompt is processed — matching the time-to-first-token of
+  a natively held Apple session, where before every turn re-processed the
+  whole prefix. Any divergence (trimmed/edited history, new conversation)
+  rebuilds as before — D12's app-owned-history semantics are unchanged, the
+  cache verifies continuation rather than assuming it. Errored or empty
+  turns never re-enter the cache; concurrent calls never share a session.
+  REST providers are unaffected (HTTP chat APIs re-send history for every
+  client, Apple's included).
 - **One chat, two drivers: the playground demos both consumption modes.**
   `AIPlaygroundView` gains an optional app-supplied **`PlaygroundEngine`**
   (label + footnote + a `streamDetailed`-shaped stream closure): when
