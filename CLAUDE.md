@@ -231,8 +231,13 @@ Next steps, in order:
    `docs/articles/feeding-dynamic-profiles.md` (git-excluded) — follows
    session 242; opens on Apple's sample reading models off an object named
    `orchestrator`; structure per the series (announced/changed/problems/
-   limits). The live-validation sentence is deliberately NOT yet written —
-   add it after the user's driver-switch run, like Part 2's "It answered".
+   limits). **FULL DRAFT (Sep 2026):** now carries everything from the
+   Sep sessions — the two-phase resolution explainer, the two-doors table +
+   hold-the-session recipe, the D7 amendment told as a problem-encountered
+   (with the "unmeasured belief" honesty), D18, and the Evaluations segue in
+   Next. The one placeholder: the limits bullet "the switch itself hasn't
+   been watched yet" — replace with the proof sentence after the user's
+   driver-switch run, like Part 2's "It answered".
 3. ~~Per-need fallback chain~~ ✅ (D7, Sep 2026) — see roadmap item 7 for
    the full record; `ModelPreference` kept at 4 cases as planned. Bundled:
    D18 (`.log` disclosure default).
