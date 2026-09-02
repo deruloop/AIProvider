@@ -67,7 +67,7 @@ questions doc into the design doc; release → CHANGELOG + state here.
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift build|test`;
   the machine's default `xcode-select` is still Command Line Tools). The
   package builds and tests green on the beta (Swift 6.4, macOS 27 SDK on the
-  host, **78 tests in 17 suites** as of the preferred() bridge). First
+  host, **89 tests in 19 suites** as of the per-need chains). First
   provider shipped on the branch:
   **`PrivateCloudComputeProvider`** (`@available(iOS 27, *)`, wired into
   `buildProviders` at one gate per D14, default-on via
@@ -228,9 +228,9 @@ Next steps, in order:
    on the chain driver, flip to "Dynamic Profile" mid-conversation, confirm
    the thread continues on the resolved model — that run is Part 3's proof
    beat.
-3. **Per-need fallback chain** (`.lightweight/.reasoning/.largeContext`),
-   keeping `ModelPreference` at 4 cases (a third tier makes the closed enum
-   combinatorial).
+3. ~~Per-need fallback chain~~ ✅ (D7, Sep 2026) — see roadmap item 7 for
+   the full record; `ModelPreference` kept at 4 cases as planned. Bundled:
+   D18 (`.log` disclosure default).
 4. **Follow-up surfaced by §8:** generalize the D13 `contextSize` capability
    from sync `Int?` to an async read, so PCC/cloud models can join the
    proactive token pre-flight (today PCC opts out → reactive only).
@@ -267,6 +267,7 @@ overflow, never inferred from the need.
 - **D15** Vendor-agnostic developer key: OpenAI/Claude/Gemini in one slot, auto-detected; model name travels with the key. *(26 impl)*
 - **D16** Streaming as an optional capability; fallback only until the first fragment — visible text is never retracted. *(26 impl)*
 - **D17** Warm-session reuse: same provider + exact conversation continuation → reuse the session; verify, never assume. *(26 impl)*
+- **D18** Privacy downgrades are logged by default (`.log`, unified log) — never silently invisible; `.silent` is an explicit opt-in. *(26 impl)*
 
 ## 5. Roadmap (ordered)
 
@@ -315,8 +316,17 @@ overflow, never inferred from the need.
 6. **iOS 27 providers** — PCC ✅ (xcode27, structural; runtime unverified);
    user-account Gemini/Claude next via the `LanguageModel`+`Executor` pattern
    (`docs/iOS27-Design.md` §6/§8). Was blocked; SDK now in hand.
-7. **Per-need fallback chain** (`.lightweight/.reasoning/.largeContext`) —
-   unblocked with 6; not started.
+7. ~~Per-need fallback chain~~ ✅ (D7 implemented, Sep 2026, 89 tests/19
+   suites): public `ModelNeed` (`.lightweight/.reasoning/.largeContext`) as a
+   `need:` parameter on respond/stream/resolve/`preferred(_:)` — a per-call
+   hint that REORDERS the chain (stable sort by privacy-level tier:
+   lightweight = onDevice→appleCloud→external; reasoning =
+   appleCloud→external→onDevice; largeContext keeps the privacy-first order,
+   sorts within-tier by known window size, and stays REACTIVE per D7 — the
+   D13 pre-flight does the routing, verified by test). `ModelPreference`
+   stays at 4 cases. Bundled D18: `PrivacyDisclosure.log` (unified log,
+   subsystem "VoltaSDK") is the new DEFAULT — silent fallback was criticism
+   4 of the Sep 2026 self-audit.
 8. ~~`preferred()` bridge~~ ✅ (Aug 2026, xcode27): returns the resolved
    provider's native `any LanguageModel` via the public
    `LanguageModelConvertible` capability (all five built-ins adopt it);

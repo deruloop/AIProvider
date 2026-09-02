@@ -248,12 +248,6 @@ public struct DemoRootView: View {
                     }
                 }
             }
-            Section("Simulated entitlements") {
-                Toggle("User has an active subscription", isOn: $userHasSubscription)
-                Text("Runtime, not configuration. On: selecting the developer-key cloud model activates directly. Off: it defers to the demo paywall sheet — the custom-flow path your app controls.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             Section {
                 Button {
                     withAnimation { apply() }
@@ -276,6 +270,12 @@ public struct DemoRootView: View {
                      : "Provider configuration takes effect only when applied.")
                     .font(.caption)
                     .foregroundStyle(hasUnappliedChanges ? .orange : .secondary)
+            }
+            Section("Simulated entitlements") {
+                Toggle("User has an active subscription", isOn: $userHasSubscription)
+                Text("Runtime, not configuration. On: selecting the developer-key cloud model activates directly. Off: it defers to the demo paywall sheet — the custom-flow path your app controls.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section {
                 ProviderStatusList(orchestrator: orchestrator)

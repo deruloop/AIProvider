@@ -18,11 +18,34 @@
 import Foundation
 import FoundationModels
 import Synchronization
+import os
+
+// MARK: - Per-call need (D7)
+
+/// What a call NEEDS, expressed per call: it REORDERS the fallback chain for
+/// that one call — it never replaces it. Every provider stays eligible;
+/// availability, the token pre-flight (D13), and the privacy policy still
+/// walk the whole (reordered) chain, so a need can never strand a call that
+/// a lower-ranked provider could have served.
+public enum ModelNeed: Sendable, Equatable {
+    /// Favour cheap, fast, private: on-device → PCC → external.
+    case lightweight
+    /// Favour capable models: PCC (the reasoning-capable free tier) →
+    /// external → on-device as the last resort.
+    case reasoning
+    /// Favour room — REACTIVELY (D7): the privacy-first order is kept, but
+    /// within each tier providers with larger known context windows rank
+    /// first, and the D13 pre-flight does the real routing. A call that
+    /// actually fits on-device still runs on-device; the crossing to a
+    /// bigger window happens only on measured overflow, never on the hint.
+    case largeContext
+}
 
 // MARK: - Selection preference
 
-/// Embryonic form of the fallback. On iOS 27 it becomes a richer chain
-/// (per-need: .lightweight / .reasoning / .largeContext, with PCC quotas).
+/// Configuration-time ordering of the chain. The per-call `ModelNeed` (D7)
+/// reorders it for a single call; the strict `…Only` modes are effectively
+/// immune (their chains hold a single tier).
 public enum ModelPreference: Sendable, CaseIterable {
     /// On-device if available, otherwise developer key. Sensible default.
     case preferOnDevice
@@ -164,7 +187,7 @@ public struct AIConfiguration: Sendable {
 
     /// What to do when fallback crosses a privacy threshold downwards
     /// (e.g. on-device → OpenAI). See `PrivacyDisclosure`.
-    public var privacyDisclosure: PrivacyDisclosure = .silent
+    public var privacyDisclosure: PrivacyDisclosure = .log
 
     public init() {}
 }
@@ -238,7 +261,7 @@ public actor AIOrchestrator {
     /// plugging in custom providers.
     public init(
         providers: [any ModelProvider],
-        privacyDisclosure: PrivacyDisclosure = .silent,
+        privacyDisclosure: PrivacyDisclosure = .log,
         responseTokenReserve: Int = 0
     ) {
         self.orderedProviders = providers
@@ -290,9 +313,12 @@ public actor AIOrchestrator {
     public func respond(
         to prompt: String,
         instructions: String? = nil,
-        history: [ChatTurn] = []
+        history: [ChatTurn] = [],
+        need: ModelNeed? = nil
     ) async throws -> String {
-        try await respondDetailed(to: prompt, instructions: instructions, history: history).text
+        try await respondDetailed(
+            to: prompt, instructions: instructions, history: history, need: need
+        ).text
     }
 
     /// Like `respond`, but also returns which provider answered and its
@@ -300,9 +326,11 @@ public actor AIOrchestrator {
     public func respondDetailed(
         to prompt: String,
         instructions: String? = nil,
-        history: [ChatTurn] = []
+        history: [ChatTurn] = [],
+        need: ModelNeed? = nil
     ) async throws -> AIResponse {
-        guard let first = orderedProviders.first else {
+        let providers = orderedProviders(for: need)
+        guard let first = providers.first else {
             throw ProviderError.noProviderAvailable
         }
 
@@ -311,7 +339,7 @@ public actor AIOrchestrator {
         let baseline = first.privacyLevel
         var lastError: ProviderError = .noProviderAvailable
 
-        for provider in orderedProviders {
+        for provider in providers {
             // Skip unavailable providers without even trying.
             if case .unavailable = await provider.availability() {
                 continue
@@ -341,6 +369,8 @@ public actor AIOrchestrator {
                 switch privacyDisclosure {
                 case .silent:
                     break
+                case .log:
+                    Self.logDowngrade(downgrade)
                 case .notify(let handler):
                     handler(downgrade)
                 case .askOnPrivacyChange(let handler):
@@ -391,9 +421,12 @@ public actor AIOrchestrator {
     public func streamResponse(
         to prompt: String,
         instructions: String? = nil,
-        history: [ChatTurn] = []
+        history: [ChatTurn] = [],
+        need: ModelNeed? = nil
     ) -> AsyncThrowingStream<String, Error> {
-        let events = streamDetailed(to: prompt, instructions: instructions, history: history)
+        let events = streamDetailed(
+            to: prompt, instructions: instructions, history: history, need: need
+        )
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -417,11 +450,12 @@ public actor AIOrchestrator {
     public func streamDetailed(
         to prompt: String,
         instructions: String? = nil,
-        history: [ChatTurn] = []
+        history: [ChatTurn] = [],
+        need: ModelNeed? = nil
     ) -> AsyncThrowingStream<AIStreamEvent, Error> {
         // Snapshot the immutable actor state so the stream task never has to
         // hop back onto the actor.
-        let providers = orderedProviders
+        let providers = orderedProviders(for: need)
         let disclosure = privacyDisclosure
         let reserve = responseTokenReserve
 
@@ -487,6 +521,8 @@ public actor AIOrchestrator {
                 switch disclosure {
                 case .silent:
                     break
+                case .log:
+                    logDowngrade(downgrade)
                 case .notify(let handler):
                     handler(downgrade)
                 case .askOnPrivacyChange(let handler):
@@ -551,13 +587,14 @@ public actor AIOrchestrator {
     /// Note: it applies availability only, not the interactive disclosure
     /// (.askOnPrivacyChange only makes sense inside the `respond` loop).
     /// With `.denyDowngrade`, providers below the threshold are excluded.
-    public func resolveProvider() async throws -> any ModelProvider {
-        guard let first = orderedProviders.first else {
+    public func resolveProvider(for need: ModelNeed? = nil) async throws -> any ModelProvider {
+        let providers = orderedProviders(for: need)
+        guard let first = providers.first else {
             throw ProviderError.noProviderAvailable
         }
         let baseline = first.privacyLevel
 
-        for provider in orderedProviders {
+        for provider in providers {
             if case .unavailable = await provider.availability() {
                 continue
             }
@@ -585,16 +622,18 @@ public actor AIOrchestrator {
     /// `LanguageModel` (custom `ModelProvider`s that don't adopt
     /// `LanguageModelConvertible`) are skipped.
     ///
-    /// A per-need overload (`preferred(_ need:)`) arrives with the per-need
-    /// chains milestone.
+    /// The per-need form is the flagship (D1/D7):
+    /// `.model(orchestrator.preferred(.reasoning))` — the need reorders the
+    /// chain for this one resolution, then the same walk applies.
     @available(iOS 27.0, macOS 27.0, *)
-    public func preferred() async throws -> any LanguageModel {
-        guard let first = orderedProviders.first else {
+    public func preferred(_ need: ModelNeed? = nil) async throws -> any LanguageModel {
+        let providers = orderedProviders(for: need)
+        guard let first = providers.first else {
             throw ProviderError.noProviderAvailable
         }
         let baseline = first.privacyLevel
 
-        for provider in orderedProviders {
+        for provider in providers {
             if case .unavailable = await provider.availability() {
                 continue
             }
@@ -658,6 +697,61 @@ public actor AIOrchestrator {
             ))
         }
         return result
+    }
+
+    // MARK: Per-need reordering (D7)
+
+    /// Reorders the configured chain for one call. Ranks are TIERS
+    /// (privacy levels double as capability/cost tiers); the sort is stable,
+    /// so within a tier the configured order still breaks ties — except for
+    /// `.largeContext`, where a larger known context window ranks first
+    /// within its tier (unknown windows rank last there: no pre-flight beats
+    /// a wrong pre-flight, D13).
+    private func orderedProviders(for need: ModelNeed?) -> [any ModelProvider] {
+        guard let need else { return orderedProviders }
+
+        func tierRank(_ provider: any ModelProvider) -> Int {
+            switch need {
+            case .lightweight, .largeContext:
+                // Cost/privacy order: local → Apple cloud → external.
+                switch provider.privacyLevel {
+                case .onDevice: return 0
+                case .appleCloud: return 1
+                case .external: return 2
+                }
+            case .reasoning:
+                // Capability order: PCC (reasoning-capable, free) → external
+                // (big models) → on-device as the last resort.
+                switch provider.privacyLevel {
+                case .appleCloud: return 0
+                case .external: return 1
+                case .onDevice: return 2
+                }
+            }
+        }
+
+        return orderedProviders.enumerated()
+            .sorted { a, b in
+                let rankA = tierRank(a.element), rankB = tierRank(b.element)
+                if rankA != rankB { return rankA < rankB }
+                if case .largeContext = need {
+                    let windowA = a.element.contextSize ?? 0
+                    let windowB = b.element.contextSize ?? 0
+                    if windowA != windowB { return windowA > windowB }
+                }
+                return a.offset < b.offset      // stable: configured order
+            }
+            .map(\.element)
+    }
+
+    // MARK: Privacy logging (D18)
+
+    private static let privacyLog = Logger(subsystem: "VoltaSDK", category: "privacy")
+
+    /// The `.log` disclosure policy (the default): a downgrade leaves a
+    /// developer-visible trace in the unified log — never silent, never UI.
+    static func logDowngrade(_ downgrade: PrivacyDowngrade) {
+        privacyLog.notice("Privacy downgrade: \(String(describing: downgrade.from), privacy: .public) → \(String(describing: downgrade.to), privacy: .public) via \(downgrade.provider.rawValue, privacy: .public)")
     }
 
     // MARK: Provider construction

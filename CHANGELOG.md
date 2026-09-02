@@ -11,6 +11,23 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
+- **Per-need chains (D7): `ModelNeed`.** Every entry point
+  (`respond`/`respondDetailed`/`streamResponse`/`streamDetailed`/
+  `resolveProvider`/`preferred`) gains a per-call `need:` hint —
+  `.lightweight` (on-device → PCC → external), `.reasoning` (PCC → external
+  → on-device), `.largeContext` (privacy-first order kept; within each tier
+  larger known context windows rank first; REACTIVE by design — the D13
+  pre-flight decides the actual crossing, so a call that fits on-device
+  stays on-device). A need reorders the chain for one call, never replaces
+  it; ties keep the configured order; `ModelPreference` stays at 4 cases.
+  The D1 flagship is now real syntax:
+  `.model(orchestrator.preferred(.reasoning))`.
+- **Privacy downgrades are logged by default (D18).** New
+  `PrivacyDisclosure.log` case — downgrades are recorded to the unified log
+  (subsystem "VoltaSDK", category "privacy") — and it replaces `.silent` as
+  the default: a privacy-first SDK should never make cloud fallbacks
+  invisible by default. `.silent` remains as an explicit opt-in. Behavior
+  change within 0.x.
 - **Warm-session reuse (D17).** The session-backed providers (on-device,
   PCC, wrapped `LanguageModel`s) now keep their last session warm: when the
   next call continues exactly the same conversation (same instructions, same

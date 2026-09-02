@@ -309,6 +309,16 @@ HTTP ones (Anthropic `overloaded_error` → transient network, `rate_limit_error
 the same fragments into Apple's generation channel, closing the
 "single-fragment executor" gap from session 339.
 
+### D18 — Privacy downgrades are logged by default, not silent
+`PrivacyDisclosure` gains a `.log` case — the downgrade is recorded to the
+unified log (subsystem "VoltaSDK", category "privacy") — and it replaces
+`.silent` as the default everywhere. Rationale (self-criticism, Sep 2026): a
+privacy-first SDK whose default lets a journal entry silently fall through to
+an external vendor was the wrong default; logging reaches no end user,
+requires no handler, costs nothing, and makes the fallback visible in
+Console/Instruments during development. `.silent` remains available as an
+explicit opt-in. Behavior change within 0.x (allowed pre-1.0).
+
 ### D17 — Warm-session reuse: verify the continuation, never assume it
 Rebuilding a session per call (the D12 discipline) re-processes the whole
 conversation prefix on every turn — a growing time-to-first-token tax on the
@@ -342,13 +352,18 @@ AIOrchestrator(providers: [any ModelProvider],      // tests / custom providers
                responseTokenReserve: Int)
 AIOrchestrator.active                               // configured shared instance
 
-// usage — history is app-owned conversation context (D12), defaults to []
-try await kit.respond(to: prompt, instructions: nil, history: []) -> String
-try await kit.respondDetailed(to:instructions:history:) -> AIResponse  // + provenance
-await kit.streamResponse(to:instructions:history:) -> AsyncThrowingStream<String, Error>       // (D16)
-await kit.streamDetailed(to:instructions:history:) -> AsyncThrowingStream<AIStreamEvent, Error> // + provenance
-try await kit.resolveProvider() -> any ModelProvider            // the primitive (D9)
-try await kit.preferred() -> any LanguageModel     // iOS 27: Dynamic Profiles bridge (D1)
+// usage — history is app-owned conversation context (D12), defaults to [];
+// every entry point also takes `need: ModelNeed? = nil` (D7): a per-call
+// hint (.lightweight / .reasoning / .largeContext) that REORDERS the chain
+// for that call (tiers by privacy level; .largeContext sorts within-tier by
+// known window size and stays reactive — the D13 pre-flight does the routing)
+try await kit.respond(to: prompt, instructions: nil, history: [], need: nil) -> String
+try await kit.respondDetailed(to:instructions:history:need:) -> AIResponse  // + provenance
+await kit.streamResponse(to:instructions:history:need:) -> AsyncThrowingStream<String, Error>       // (D16)
+await kit.streamDetailed(to:instructions:history:need:) -> AsyncThrowingStream<AIStreamEvent, Error> // + provenance
+try await kit.resolveProvider(for: need) -> any ModelProvider   // the primitive (D9)
+try await kit.preferred(_ need: ModelNeed? = nil) -> any LanguageModel  // iOS 27: Dynamic Profiles bridge (D1/D7)
+enum ModelNeed { lightweight, reasoning, largeContext }         // (D7)
 FoundationModelsTranscript.entries(instructions:history:) -> [Transcript.Entry]  // ChatTurn → native transcript (D12↔profile glue)
 struct PlaygroundEngine { label, footnote, stream }  // VoltaSDKUI: app-supplied playground driver (D1)
 await kit.contextUsage(instructions:history:) -> ContextUsage?  // window pressure (D13)
@@ -362,7 +377,7 @@ protocol ModelProvider { identifier; privacyLevel; availability(); respond(to:in
 enum AIStreamEvent { began(provider:privacyLevel:), text(String) }               // (D16)
 enum ProviderError { ...; var isRecoverableByFallback: Bool }
 enum PrivacyLevel { external < appleCloud < onDevice }
-enum PrivacyDisclosure { silent, notify(…), askOnPrivacyChange(…), denyDowngrade }
+enum PrivacyDisclosure { silent, log /* default, D18 */, notify(…), askOnPrivacyChange(…), denyDowngrade }
 struct PrivacyDowngrade { from, to, provider }
 enum ModelPreference { preferOnDevice, preferDeveloperKey, onDeviceOnly, developerKeyOnly }
 enum CloudVendor { openAI, anthropic, gemini; detect(fromKey:); defaultModel; modelDocumentationURL } // (D15)

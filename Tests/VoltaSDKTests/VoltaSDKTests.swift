@@ -1198,3 +1198,94 @@ struct SessionCacheTests {
         #expect(cache.checkOut(instructions: "be verbose", history: []) == nil)
     }
 }
+
+// MARK: - Per-need chains (D7)
+
+@Suite("Per-need chains (D7)")
+struct ModelNeedTests {
+
+    private func chain() -> [MockProvider] {
+        [
+            MockProvider(identifier: .openAI, privacyLevel: .external,
+                         outcome: .success("external"), contextSize: 128_000, tokenCount: 10),
+            MockProvider(identifier: .privateCloudCompute, privacyLevel: .appleCloud,
+                         outcome: .success("apple-cloud")),
+            MockProvider(identifier: .onDevice, privacyLevel: .onDevice,
+                         outcome: .success("on-device"), contextSize: 4_096, tokenCount: 10)
+        ]
+    }
+
+    @Test("No need keeps the configured order")
+    func nilNeedKeepsOrder() async throws {
+        let kit = AIOrchestrator(providers: chain())
+        #expect(try await kit.respond(to: "hi") == "external")
+    }
+
+    @Test(".lightweight leads with on-device even when external is configured first")
+    func lightweightPrefersLocal() async throws {
+        let kit = AIOrchestrator(providers: chain())
+        #expect(try await kit.respond(to: "hi", need: .lightweight) == "on-device")
+    }
+
+    @Test(".reasoning leads with the Apple-cloud tier, on-device last")
+    func reasoningPrefersCapable() async throws {
+        let kit = AIOrchestrator(providers: chain())
+        #expect(try await kit.respond(to: "hi", need: .reasoning) == "apple-cloud")
+
+        // With PCC gone, external outranks on-device for reasoning.
+        let noPCC = AIOrchestrator(providers: chain().filter { $0.identifier != .privateCloudCompute })
+        #expect(try await noPCC.respond(to: "hi", need: .reasoning) == "external")
+    }
+
+    @Test(".largeContext stays reactive: a call that fits still runs on-device")
+    func largeContextIsReactive() async throws {
+        let kit = AIOrchestrator(providers: chain())
+        // 10 tokens fits the 4K on-device window → no crossing (D7).
+        #expect(try await kit.respond(to: "hi", need: .largeContext) == "on-device")
+    }
+
+    @Test(".largeContext crosses on measured overflow, to the biggest window")
+    func largeContextCrossesOnOverflow() async throws {
+        let kit = AIOrchestrator(
+            providers: [
+                MockProvider(identifier: .onDevice, privacyLevel: .onDevice,
+                             outcome: .success("on-device"), contextSize: 4_096, tokenCount: 8_000),
+                MockProvider(identifier: .anthropic, privacyLevel: .external,
+                             outcome: .success("small-cloud"), contextSize: 200_000, tokenCount: 8_000),
+                MockProvider(identifier: .gemini, privacyLevel: .external,
+                             outcome: .success("big-cloud"), contextSize: 1_000_000, tokenCount: 8_000)
+            ],
+            responseTokenReserve: 0
+        )
+        // Overflows on-device (pre-flight skips it, D13); within the external
+        // tier the larger window ranks first.
+        #expect(try await kit.respond(to: "hi", need: .largeContext) == "big-cloud")
+    }
+
+    @Test("Streaming honours the need")
+    func streamingHonoursNeed() async throws {
+        let kit = AIOrchestrator(providers: chain())
+        var fragments: [String] = []
+        for try await fragment in await kit.streamResponse(to: "hi", need: .lightweight) {
+            fragments.append(fragment)
+        }
+        #expect(fragments == ["on-device"])
+    }
+
+    @Test("preferred(_ need:) resolves by need (iOS 27)")
+    func preferredHonoursNeed() async throws {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
+        let kit = AIOrchestrator(providers: [
+            AnthropicProvider(apiKey: "sk-ant-test"),                    // external
+            LanguageModelProvider(
+                identifier: .privateCloudCompute,
+                privacyLevel: .appleCloud,
+                model: CloudAccountLanguageModel(vendor: .gemini, apiKey: "AIza-x", model: "m"),
+                connected: true
+            )
+        ])
+        let model = try await kit.preferred(.reasoning)
+        // The Apple-cloud tier outranks external for reasoning.
+        #expect((model as? CloudAccountLanguageModel)?.vendor == .gemini)
+    }
+}

@@ -37,8 +37,15 @@ public struct PrivacyDowngrade: Sendable, Equatable {
 /// Policy the orchestrator applies when fallback crosses a privacy
 /// threshold downwards.
 public enum PrivacyDisclosure: Sendable {
-    /// No signal: the fallback is transparent. Default.
+    /// No signal: the fallback is transparent.
     case silent
+    /// The fallback proceeds; the downgrade is recorded to the unified log
+    /// (subsystem "VoltaSDK", category "privacy"). The DEFAULT since D18:
+    /// a fully silent default was too quiet for a privacy-first SDK — an
+    /// adopter could ship cloud fallbacks without ever noticing them —
+    /// while a log line costs nothing, reaches no end user, and surfaces
+    /// in Console/Instruments during development.
+    case log
     /// The fallback proceeds, but the handler is notified (e.g. to show a
     /// "response generated in the cloud" banner). The handler is synchronous
     /// and cannot block the fallback.

@@ -169,7 +169,10 @@ Matches the roadmap in CLAUDE.md:
    chains between on-device and the developer key. **Next:** user-account
    Gemini/Claude via the `LanguageModel` protocol (the Executor pattern, §8),
    wired into the same place.
-2. Runtime fallback chain keyed on need (`.lightweight/.reasoning/.largeContext`),
+2. ~~Runtime fallback chain keyed on need~~ ✅ **implemented (Sep 2026,
+   xcode27)** as a per-call `need:` hint that reorders the configured chain
+   (stable tier sort; `.largeContext` reactive per D7, window-sorted within
+   tier; verified by tests incl. the measured-overflow crossing),
    replacing/extending `ModelPreference` (kept at 4 cases on purpose — a third
    provider makes a closed enum combinatorial).
 3. ~~`preferred(_ need:)` bridge for Dynamic Profiles~~ ✅ **shipped as
