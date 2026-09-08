@@ -11,6 +11,11 @@ iOS 27 extension (multi-provider, PCC, Dynamic Profiles bridge).
 > `@available(iOS 27, *)` keeps the deployment target at iOS 26, so adopters on
 > Xcode 26.4 keep using `0.3.5`. Not yet released.
 
+- **README brought current with the iOS 27 line.** Streaming, per-need
+  resolution, the Dynamic Profiles bridge, the `.log` disclosure default,
+  warm-session reuse, and the cross-vendor OAuth verdict (a user account
+  means the user's API key) now appear in the public README; test counts and
+  contributor notes refreshed.
 - **Per-need chains (D7): `ModelNeed`.** Every entry point
   (`respond`/`respondDetailed`/`streamResponse`/`streamDetailed`/
   `resolveProvider`/`preferred`) gains a per-call `need:` hint —

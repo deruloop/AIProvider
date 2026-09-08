@@ -2,11 +2,12 @@
 
 **VOLTA** — *Versatile Orchestration Layer for Tiered AI*
 
-A Swift framework that **resolves at runtime which AI model to use** —
-on-device (Apple Intelligence) or cloud — with automatic fallback, privacy
-disclosure, and multi-turn conversations. The app asks for a response; Volta
-picks the right model based on availability, preference, context window, and
-privacy policy.
+A Swift framework that **resolves at runtime which AI model to use**,
+on-device (Apple Intelligence) or cloud, with automatic fallback, streaming,
+privacy disclosure, and multi-turn conversations. The app asks for a
+response, and Volta picks the model based on availability, need, preference,
+context window, and privacy policy. On iOS 27 the same resolution can hand
+the winning model to a native Dynamic Profile.
 
 This is not an agent framework: it owns no sessions and no conversations. Its
 only job is **model resolution**.
@@ -25,9 +26,9 @@ only job is **model resolution**.
 
 | OS | What works |
 |---|---|
-| **iOS / macOS 26.0+** | The whole core: fallback chain, typed errors, privacy disclosure, multi-turn conversations, vendor-agnostic developer key (OpenAI / Claude / Gemini), optional UI components. Context handling is *reactive* (error → fallback). |
+| **iOS / macOS 26.0+** | The whole core: fallback chain, per-call needs, token streaming, typed errors, privacy disclosure (logged by default), multi-turn conversations with warm-session reuse, vendor-agnostic developer key (OpenAI / Claude / Gemini), optional UI components. Context handling is *reactive* (error → fallback). |
 | **iOS / macOS 26.4+** | The *token-aware* tier lights up on its own: exact on-device token counting, automatic context-window pre-flight, `contextUsage` to know how full the window is. |
-| **iOS / macOS 27+** | **Private Cloud Compute** joins the chain as the free, Apple-hosted "powered" tier — see [Private Cloud Compute](#private-cloud-compute-ios--macos-27). Opt-in via an Apple entitlement; gracefully absent otherwise. |
+| **iOS / macOS 27+** | **Private Cloud Compute** joins the chain as the free, Apple-hosted "powered" tier ([details](#private-cloud-compute-ios--macos-27)); users can bring [their own vendor account](#user-accounts-ios--macos-27); official vendor packages plug in via [`customModels`](#official-vendor-packages-custommodels); and [`preferred(_:)`](#dynamic-profiles-ios--macos-27) hands the resolved model to a native Dynamic Profile. Each piece degrades gracefully where unavailable. |
 
 Requirements: Swift 6.2+, and **Xcode 27 or newer to build this line** — it
 references the iOS/macOS 27 SDK (Private Cloud Compute). The code is
@@ -96,9 +97,12 @@ never write it in source code.
 **Privacy disclosure policy** — what happens when fallback crosses *down* to a
 less-private provider (e.g. on-device → cloud):
 
-- `.silent` — fall back without signalling.
-- `.notify { downgrade in … }` — proceed, but hand you the crossing (for a
-  banner/badge).
+- `.log` (the default) — proceed, and record the crossing in the unified log
+  (subsystem "VoltaSDK"). Fallbacks stay visible in Console during
+  development and invisible to end users.
+- `.silent` — fall back without any signal (explicit opt-in).
+- `.notify { downgrade in … }` — proceed, but hand the crossing to the app
+  (for a banner or a badge).
 - `.askOnPrivacyChange { downgrade in await … }` — ask first; return `false`
   to refuse that provider and keep walking the chain.
 - `.denyDowngrade` — never cross below the preferred provider's privacy level.
@@ -128,9 +132,42 @@ let answer = try await kit.respond(
 // Or, with provenance (to show who answered):
 let response = try await kit.respondDetailed(to: "…")
 print(response.text, response.provider, response.privacyLevel)
+
+// Or streamed, the answer arriving as fragments; a .began event carries
+// the provenance before the first one:
+for try await event in await kit.streamDetailed(to: "…") {
+    switch event {
+    case .began(let provider, _): print("answering:", provider)
+    case .text(let fragment): render(fragment)
+    }
+}
 ```
 
-### 3. Multi-turn conversations
+Streaming keeps the fallback promise honest. Automatic fallback applies only
+until the first fragment is visible; after that, a failure surfaces instead
+of silently re-answering with a different model, so text a user has read is
+never retracted. A provider without a native streaming path delivers its
+whole answer as one fragment through the same loop.
+
+### 3. Per-call needs
+
+A need is a per-call hint that reorders the chain for that one call and
+never replaces it:
+
+```swift
+let brief = try await kit.respond(to: "Classify this ticket", need: .lightweight)
+let deep  = try await kit.respond(to: "Review this proof",   need: .reasoning)
+```
+
+`.lightweight` keeps everything local-first (on-device, then PCC, then
+external). `.reasoning` and `.largeContext` lead with the capable tiers, PCC
+and then external with larger known context windows first, and keep on-device
+as the final fallback. The token pre-flight still guards every window, so a
+need can never send a call somewhere it doesn't fit, and every provider stays
+reachable. `providerStatuses(for: need)` previews the reordered chain without
+executing anything (the demo shows it live under its need picker).
+
+### 4. Multi-turn conversations
 
 Volta is **stateless**: it remembers nothing between calls. The conversation
 belongs to the app, which passes it with every call:
@@ -151,7 +188,12 @@ mid-conversation, the next one receives the same history and the conversation
 continues seamlessly (with the configured privacy disclosure). When and how to
 trim the history remains the app's choice.
 
-### 4. Token awareness (26.4+)
+Statelessness costs no speed. When a call continues exactly the previous
+conversation on the same provider, Volta reuses the warm session under the
+hood and only the new prompt is processed. Any edit to the history rebuilds
+the session instead, which is what makes a trim actually take effect.
+
+### 5. Token awareness (26.4+)
 
 Volta runs an automatic **pre-flight**: if it knows a call cannot fit a
 provider's context window, it skips that provider without paying for a doomed
@@ -167,14 +209,16 @@ if let usage = await kit.contextUsage(history: history), usage.fraction > 0.8 {
 `usage` is `nil` when the resolved provider can't count (an estimate is never
 passed off as a count).
 
-### 5. Resolution without execution (the primitive)
+### 6. Resolution without execution (the primitive)
 
 ```swift
-let provider = try await kit.resolveProvider()
-// Resolves the chain's first usable provider without executing anything.
+let provider = try await kit.resolveProvider()          // Volta's own type
+let model    = try await kit.preferred(.reasoning)      // Apple's LanguageModel (27+)
+// Both resolve the chain's first usable provider without executing anything;
+// preferred(_:) returns it as a native model for Apple's own machinery.
 ```
 
-### 6. Explicit instance (no global state)
+### 7. Explicit instance (no global state)
 
 ```swift
 var config = AIConfiguration()
@@ -341,13 +385,13 @@ quickest confidence check is: with the capability added, the
 `appleCloud`. Testing is allowed via **TestFlight or ad-hoc distribution**, and
 test installs do **not** count toward the 2M-download limit.
 
-## User accounts & managed OAuth (iOS / macOS 27)
+## User accounts (iOS / macOS 27)
 
 Beyond the developer key (which the app pays for), iOS 27 lets a user bring
 **their own** OpenAI / Claude / Gemini account through Apple's public
-`LanguageModel` protocol. Add them to `AIConfiguration.userAccounts`.
-
-The simplest path — the user pastes their own key:
+`LanguageModel` protocol. Add them to `AIConfiguration.userAccounts`; usage
+bills the user, and the account takes its place in the chain like any other
+provider (never auto-selected).
 
 ```swift
 import VoltaSDK
@@ -355,10 +399,19 @@ import VoltaSDK
 config.userAccounts = [UserAccount(vendor: .anthropic, apiKey: userProvidedKey)]
 ```
 
-For a real **"Sign in with `<Vendor>`"** flow, add the optional **`VoltaSDKAuth`**
-product. It runs the whole OAuth flow for you — the sign-in window
-(`ASWebAuthenticationSession`), PKCE, the code exchange, Keychain storage, and
-silent refresh:
+**A user account means the user's API key, and that is vendor policy, no
+workaround exists.** All three vendors close the same door on personal
+sign-in from third-party apps (verified live during this work). Google's
+generation endpoints reject personal OAuth tokens from third-party clients;
+Anthropic restricts Claude Free/Pro/Max tokens to its own products; OpenAI's
+"Sign in with ChatGPT" shares identity without plan-backed inference. The
+sanctioned routes are the user's own key (above) or the vendor's official
+package (below).
+
+The optional **`VoltaSDKAuth`** product remains for providers that *do*
+allow third-party OAuth, self-hosted or enterprise endpoints for example. It
+runs the whole flow, the sign-in window (`ASWebAuthenticationSession`), PKCE,
+the code exchange, Keychain storage, and silent refresh:
 
 ```swift
 import VoltaSDKAuth
@@ -389,12 +442,6 @@ one revocation away from breaking every app — so "enable a provider" means
 after that. (`VoltaSDKAuth` uses AuthenticationServices/Keychain, so it's a
 separate product from the headless core.)
 
-One provider-policy note from live testing: **Gemini *generation* doesn't
-accept personal-OAuth tokens from third-party clients** (Google reserves that
-for its own tooling), so a user-connected Gemini account uses their API key.
-Google's official route for Gemini in apps is its **Firebase package** — which
-plugs in below.
-
 ### Official vendor packages (`customModels`)
 
 Vendors ship their own conformances to Apple's `LanguageModel` protocol —
@@ -416,6 +463,34 @@ The model shows up in `providerStatuses()`, the picker, and provenance under
 the identifier you give it; its `privacyLevel` drives the same disclosure
 policy as every other provider. Custom models trail the built-in providers in
 the chain order and are never auto-selected.
+
+## Dynamic Profiles (iOS / macOS 27)
+
+Apple's Dynamic Profiles give every agent a `.model(...)` slot and nothing
+that decides what goes in it. `preferred(_:)` is Volta's answer, the resolved
+provider returned as a native `any LanguageModel`:
+
+```swift
+let model = try await kit.preferred(.reasoning)   // async, so resolved first
+
+let session = LanguageModelSession(
+    profile: RecipeAssistant().model(model)       // your own DynamicProfile
+)
+let reply = try await session.respond(to: "Dinner for four, vegetarian?")
+```
+
+The recommended pattern is to resolve once when a conversation starts and
+hold the session (Apple keeps the state, and each turn processes only the new
+prompt), then re-resolve at real boundaries, a failure or a new conversation.
+An existing `[ChatTurn]` history replays into a fresh profile session through
+the public `FoundationModelsTranscript.entries(instructions:history:)`.
+
+Two things to know. Under Apple's driver there is no mid-turn fallback (the
+chain isn't running the call, so a mid-conversation failure surfaces as
+Apple's error); and under Swift 6 the session's `sending profile:` parameter
+rejects a profile declared in a `@MainActor` context, so build the profile in
+a `nonisolated` helper. Custom `ModelProvider`s can join the bridge by
+adopting `LanguageModelConvertible`.
 
 ## Demo apps
 
@@ -439,11 +514,20 @@ off. The chat stays disabled until a model is committed — the
 `selection == nil` contract that keeps gated providers from answering before
 activation.
 
+The chat itself demonstrates the whole iOS 27 story. A need picker with a
+live preview of the reordered chain, and a driver switch between "VoltaSDK
+chain" (the SDK drives, with fallback and privacy gates) and "Dynamic
+Profile" (Apple drives a native profile fed by `preferred()`), with the same
+conversation surviving the switch mid-thread.
+
 ## Tests
 
 ```bash
-swift test   # 44 tests: fallback, privacy, conversations, tokens, PCC wiring, parsing
+swift test   # 89 tests in 19 suites: fallback, needs, streaming, sessions,
+             # privacy, tokens, PCC wiring, parsing, the profiles bridge
 ```
+
+Building the tests needs the Xcode 27 toolchain (see Version support).
 
 ## For framework contributors
 
@@ -451,7 +535,8 @@ Internal documentation lives in `docs/`:
 - [docs/iOS26-Implementation.md](docs/iOS26-Implementation.md) — how the
   iOS 26 / 26.4 base is implemented (decisions, stable API, verification).
 - [docs/iOS27-Design.md](docs/iOS27-Design.md) — the iOS 27 extension: design
-  plus what's verified against the real SDK (§8). Private Cloud Compute is
-  implemented; user-account providers and the Dynamic Profiles bridge are next.
+  plus what's verified against the real SDK (§8). Private Cloud Compute, the
+  user-account front door, streaming, per-need chains, and the Dynamic
+  Profiles bridge are implemented; the Evaluations work is next.
 - [docs/iOS27-OpenQuestions.md](docs/iOS27-OpenQuestions.md) — the remaining
   open questions for the iOS 27 work.
